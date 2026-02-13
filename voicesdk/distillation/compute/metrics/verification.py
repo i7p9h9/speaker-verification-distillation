@@ -157,10 +157,10 @@ def compute_eer_fast(scores_target, scores_impostor, n=1000):
 
 
 
-def compute_min_c(pt, tar, imp, c_miss=1, c_fa=1):
+def compute_min_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
     tar_imp, fnr, fpr = compute_frr_far(tar, imp)
 
-    beta = c_fa * (1 - pt) / (c_miss * pt)
+    beta = c_fa * (1 - p_target) / (c_miss * p_target)
     log_beta = np.log(beta)
     act_c = fnr + beta * fpr
     index_min = np.argmin(act_c)
@@ -170,8 +170,8 @@ def compute_min_c(pt, tar, imp, c_miss=1, c_fa=1):
     return min_c, threshold, log_beta
 
 
-def compute_act_c(pt, tar, imp, c_miss=1, c_fa=1):
-    beta = c_fa * (1 - pt) / (c_miss * pt)
+def compute_act_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    beta = c_fa * (1 - p_target) / (c_miss * p_target)
     log_beta = np.log(beta)
 
     f_tar = list(filter(lambda t: t < log_beta, tar))
@@ -183,6 +183,39 @@ def compute_act_c(pt, tar, imp, c_miss=1, c_fa=1):
     act_c = fnr + beta * fpr
 
     return act_c, fpr, fnr
+
+
+def compute_min_dcf(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    min_c, threshold, log_beta = compute_min_c(tar, imp, c_miss, c_fa, p_target)
+
+    # Normalization factor: cost of naive system
+    c_default = min(c_miss * p_target, c_fa * (1 - p_target))
+    min_dcf = min_c / c_default
+
+    return min_dcf, threshold, log_beta
+
+
+def compute_all_costs(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    beta = c_fa * (1 - p_target) / (c_miss * p_target)
+    c_default = min(c_miss * p_target, c_fa * (1 - p_target))
+
+    log_beta = np.log(beta)
+    fnr_act = np.mean(tar < log_beta)
+    fpr_act = np.mean(imp > log_beta)
+    act_c = fnr_act + beta * fpr_act
+
+    thresholds = np.sort(np.concatenate([tar, imp]))
+    costs = []
+    for t in thresholds:
+        fnr = np.mean(tar < t)
+        fpr = np.mean(imp > t)
+        costs.append(fnr + beta * fpr)
+    min_c = np.min(costs)
+
+    act_dcf = act_c / c_default
+    min_dcf = min_c / c_default
+
+    return act_c, min_c, act_dcf, min_dcf
 
 
 def compute_llr_c(tar, imp):
@@ -198,11 +231,11 @@ def get_eer(tar, imp):
     return compute_eer(tar, imp)[0]
 
 
-def get_min_c(p_target, tar, imp, c_miss=1, c_fa=1):
+def get_min_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
     if not hasattr(p_target, '__iter__'):
         p_target = [p_target]
 
-    values = list(map(lambda pt: compute_min_c(pt, tar, imp, c_miss, c_fa)[0], p_target))
+    values = list(map(lambda pt: compute_min_c(tar, imp, c_miss, c_fa, pt)[0], p_target))
 
     return sum(values) / len(values)
 
@@ -211,7 +244,7 @@ def get_act_c(p_target, tar, imp, c_miss=1, c_fa=1):
     if not hasattr(p_target, '__iter__'):
         p_target = [p_target]
 
-    values = list(map(lambda pt: compute_act_c(pt, tar, imp, c_miss, c_fa)[0], p_target))
+    values = list(map(lambda pt: compute_act_c(tar, imp, c_miss, c_fa, pt)[0], p_target))
 
     return sum(values) / len(values)
 
@@ -268,7 +301,7 @@ def test_by_protocol(file, c_miss, c_fa, protocol):
             impostor_scores.append(score)
 
     p_target = [0.01, 0.005]
-    minc = get_min_c(p_target, target_scores, impostor_scores, c_miss=c_miss, c_fa=c_fa)
+    minc = get_min_c(target_scores, impostor_scores, c_miss=c_miss, c_fa=c_fa, p_target=p_target)
     eer = get_eer(target_scores, impostor_scores)
 
     return eer, minc
@@ -286,7 +319,7 @@ def compute_metrics(file, c_miss, c_fa):
                 impostor_scores.append(float(score))
 
     p_target = [0.01, 0.005]
-    minc = get_min_c(p_target, target_scores, impostor_scores, c_miss=c_miss, c_fa=c_fa)
+    minc = get_min_c(target_scores, impostor_scores, c_miss=c_miss, c_fa=c_fa, p_target=p_target)
     eer = get_eer(target_scores, impostor_scores)
 
     return eer, minc
