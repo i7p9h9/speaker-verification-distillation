@@ -97,8 +97,11 @@ def get_model() -> nn.Module:
         model.eval()
         return model
     """
-    cfg = read_yaml(os.path.join(__file__, "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"))
-    state_dict_teacher = torch.load("data/ckpt/rn100_v016_flr_vox4_v2/model.pt", map_location=torch.device("cpu"))
+    cfg = read_yaml(os.path.join(os.path.dirname(__file__), "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"))
+    state_dict_teacher = torch.load(
+        os.path.join(os.path.dirname(__file__), "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"),
+        map_location=torch.device("cpu"),
+    )
 
     model_teacher = ResNetTF(**cfg["model_args"])
     model_teacher.eval()
