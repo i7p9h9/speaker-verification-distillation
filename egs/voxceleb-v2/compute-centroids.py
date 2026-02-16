@@ -435,6 +435,22 @@ def prepare_teacher_head(config: TeacherPrepConfig) -> nn.Module:
     elif config.method == "centroid":
         head = compute_centroid_head(utterance_embeddings, config)
         head_name = "head_centroid"
+    elif config.method == "both":
+        head_lda = compute_lda_head(utterance_embeddings, config)
+        head_centroid = compute_centroid_head(utterance_embeddings, config)
+
+        head_name_lda = "head_lda"
+        head_name_centroid = "head_centroid"
+
+        torch.save(head_lda.state_dict(), output_path / f"{head_name_lda}.pt")
+        head_lda.save_speaker_mapping(str(output_path / f"{head_name_lda}_speakers.json"))
+        print(f"LDA head saved to {output_path / f'{head_name_lda}.pt'}")
+
+        torch.save(head_centroid.state_dict(), output_path / f"{head_name_centroid}.pt")
+        head_centroid.save_speaker_mapping(str(output_path / f"{head_name_centroid}_speakers.json"))
+        print(f"Centroid head saved to {output_path / f'{head_name_centroid}.pt'}")
+
+        return head_lda, head_centroid
     else:
         raise ValueError(f"Unknown method: {config.method}")
 
