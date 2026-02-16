@@ -1,10 +1,11 @@
-import math
 import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 from scipy.signal import windows
+from .preproc import NormalizeAudio, PreEmphasis
+
 
 def hz2mel(hz):
     """Convert a value in Hertz to Mels
@@ -13,12 +14,14 @@ def hz2mel(hz):
     """
     return 2595 * np.log10(1 + hz / 700.)
 
+
 def mel2hz(mel):
     """Convert a value in Mels to Hertz
     :param mel: a value in Mels. This can also be a numpy array, conversion proceeds element-wise.
     :returns: a value in Hertz. If an array was passed in, an identical sized array is returned.
     """
     return 700 * (10 ** (mel / 2595.0) - 1)
+
 
 def get_filterbanks(low_freq: int = 20,
                     high_freq: int = 7600,
@@ -39,7 +42,7 @@ def get_filterbanks(low_freq: int = 20,
     lowmel = hz2mel(low_freq)
     highmel = hz2mel(high_freq)
     melpoints = np.linspace(lowmel, highmel, nfilt + 2)
-    
+
     lower_edge_mel = melpoints[:-2].reshape(1, -1)
     center_mel = melpoints[1:-1].reshape(1, -1)
     upper_edge_mel = melpoints[2:].reshape(1, -1)
@@ -53,6 +56,7 @@ def get_filterbanks(low_freq: int = 20,
 
     mel_weights_matrix = np.maximum(0.0, np.minimum(lower_slopes, upper_slopes))
     return np.vstack([np.zeros((1, nfilt)), mel_weights_matrix])[:, :].astype('float32')
+
 
 class SpectralFeaturesTF(nn.Module):
     def __init__(self,
@@ -123,7 +127,7 @@ class SpectralFeaturesTF(nn.Module):
         self.low_freq = low_freq
         self.high_freq = high_freq
         self.num_bins = num_bins
-        
+
         self.return_img = return_img
 
         if mode in ['melbanks', 'mfcc']:
@@ -188,23 +192,23 @@ class SpectralFeaturesTF(nn.Module):
         inputs = inputs.float()
         if inputs.ndim == 2:
             inputs = inputs.unsqueeze(1)
-            
+
         if self.normalize_signal:
             inputs = (inputs - inputs.mean(dim=2, keepdims=True)) /\
                      (inputs.std(dim=2, keepdims=True, unbiased=False) + self.eps)
-            
+
         real_part = F.conv1d(inputs, self.real_kernel_pt, stride=self.shift, padding=self.shift//2)
         imag_part = F.conv1d(inputs, self.image_kernel_pt, stride=self.shift, padding=self.shift//2)
 
         if self.features == 'complex':
             return [real_part, imag_part]
-        
+
         fft = torch.square(real_part) + torch.square(imag_part)
         if self.sqrt_real_imag:
             fft = torch.sqrt(fft)
-            
+
         feat = fft.clip(self.eps, 1/self.eps)
-        
+
         if self.fft_mode == 'log':
             feat = torch.log(feat)
 
@@ -223,38 +227,15 @@ class SpectralFeaturesTF(nn.Module):
             feat = feat[:,None,:,:]
         return feat.to(dtype)
 
+
 class LogSpec(nn.Module):
     def __init__(self,eps:float=1e-10):
         super().__init__()
         self.eps = eps
-        
+
     def forward(self,x):
         return x.clip(self.eps,1e+8).log()
-    
-class NormalizeAudio(nn.Module):
-    def __init__(self,eps:float=1e-10):
-        super().__init__()
-        self.eps = eps
-        
-    def forward(self,x):
-        if x.ndim == 2:
-            x = x.unsqueeze(1)
-        return ((x - x.mean(dim=2, keepdims=True)) /\
-                     (x.std(dim=2, keepdims=True, unbiased=False) + self.eps)).squeeze(1)
 
-class PreEmphasis(torch.nn.Module):
-    def __init__(self, coef: float = 0.97):
-        super().__init__()
-        self.coef = coef
-        self.register_buffer(
-            'flipped_filter', torch.FloatTensor([-self.coef, 1.]).unsqueeze(0).unsqueeze(0)
-        )
-
-    def forward(self, x):
-        if x.ndim == 2:
-            x = x.unsqueeze(1)
-        x = F.pad(x, (1, 0), 'reflect')
-        return F.conv1d(x, self.flipped_filter).squeeze(1)
 
 class FbankAug(nn.Module):
     def __init__(self, freq_mask_width = (0, 8), time_mask_width = (0, 10), freq_start_bin=0):
@@ -283,14 +264,15 @@ class FbankAug(nn.Module):
             mask = mask.unsqueeze(2)
         else:
             mask = mask.unsqueeze(1)
-            
+
         x = x.masked_fill_(mask, 0.0)
         return x.view(*original_size)
 
-    def forward(self, x):    
+    def forward(self, x):
         x = self.mask_along_axis(x, dim=2)
         x = self.mask_along_axis(x, dim=1)
         return x
+
 
 class TFMelBanks(nn.Module):
     def __init__(self, 
@@ -311,9 +293,9 @@ class TFMelBanks(nn.Module):
     ):
         super(TFMelBanks, self).__init__()
         self.torchfbank = torch.nn.Sequential(
-            NormalizeAudio(eps) if norm_signal else nn.Identity(),
+            NormalizeAudio(eps, squeeze=True) if norm_signal else nn.Identity(),
             PreEmphasis() if do_preemph else nn.Identity(),
-            
+
             SpectralFeaturesTF(
                 frame_length = win_length,
                 frame_step = hop_length,
@@ -353,6 +335,7 @@ class TFMelBanks(nn.Module):
                 if self.training:
                     x = self.specaug(x)
         return x.to(xdtype)
+
 
 class SlidingInstanceNormAudio(nn.Module):
     """
@@ -404,7 +387,7 @@ class SlidingInstanceNormAudio(nn.Module):
         pad_tot = (self.window_size - 1)
         pad_right = int(pad_tot * self.lookahead_ratio)
         pad_left = pad_tot - pad_right
-        
+
 
         # Reflectively pad both sides of the time dimension
         # PyTorch's F.pad expects the pad tuple in (left, right) order for 1D.
@@ -442,15 +425,16 @@ class SlidingInstanceNormAudio(nn.Module):
             x_norm = x_norm.squeeze(1)
         return x_norm
 
+
 class ChunkedInstanceNormAudio(nn.Module):
     """
     Normalizes an audio signal in non-overlapping chunks.
-    
+
     This layer splits the time dimension into chunks (using non-overlapping avg_pool1d),
     computes the per-chunk mean and variance, and then interpolates the computed
     statistics back to the original temporal resolution. It then normalizes the input
     by subtracting the chunked mean and (optionally) dividing by the chunked standard deviation.
-    
+
     Parameters:
       - chunk_size: Number of frames in each chunk (must be >=1).
       - eps: Small constant to avoid dividing by zero.
@@ -458,7 +442,7 @@ class ChunkedInstanceNormAudio(nn.Module):
       - lookahead_ratio: Ratio used to determine how many frames to pad on the right
         relative to the total pad amount (chunk_size - 1).
       - pad_mode: Padding mode to use (e.g. 'reflect').
-      
+  
     Example:
       >>> signal = torch.arange(20)[None, None, :].float()
       >>> norm_layer = ChunkedInstanceNormAudio(chunk_size=10, lookahead_ratio=0.2, eps=1e-10)
@@ -475,13 +459,18 @@ class ChunkedInstanceNormAudio(nn.Module):
         self.pad_mode = pad_mode
 
     def extra_repr(self) -> str:
-        return f"chunk_size={self.chunk_size}, eps={self.eps}, scale_var={self.scale_var}, lookahead_ratio={self.lookahead_ratio}"
+        return ", ".join([
+            f"chunk_size={self.chunk_size}",
+            f"eps={self.eps}",
+            f"scale_var={self.scale_var}",
+            f"lookahead_ratio={self.lookahead_ratio}"
+        ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x: Tensor of shape [B, T] or [B, C, T].
            If 2D, it is interpreted as [B, 1, T].
-           
+   
         Returns:
            Normalized tensor of shape [B, C, T].
         """
@@ -491,44 +480,45 @@ class ChunkedInstanceNormAudio(nn.Module):
             x = x.unsqueeze(1)  # Convert to shape [B, 1, T]
 
         B, C, T = x.shape
-        
+
         # Determine padding amounts based on chunk_size and lookahead_ratio.
         pad_tot = self.chunk_size - 1
         pad_right = int(pad_tot * self.lookahead_ratio)
         pad_left = pad_tot - pad_right
-        
+
         # Reflectively pad the time dimension.
         # F.pad expects padding in the form (pad_left, pad_right) for 1D.
         x_p = F.pad(x, (pad_left, pad_right), mode=self.pad_mode)
-        
+
         # Compute chunked mean and mean of squared values over non-overlapping chunks.
         chunked_mean = F.avg_pool1d(x_p, kernel_size=self.chunk_size, stride=self.chunk_size,
                                     padding=0, ceil_mode=False, count_include_pad=True)
         chunked_mean_sq = F.avg_pool1d(x_p**2, kernel_size=self.chunk_size, stride=self.chunk_size,
                                        padding=0, ceil_mode=False, count_include_pad=True)
-        
+
         # Interpolate the computed statistics to the original temporal length T using nearest neighbor.
         chunked_mean = F.interpolate(chunked_mean, size=T, mode='nearest')
         chunked_mean_sq = F.interpolate(chunked_mean_sq, size=T, mode='nearest')
-        
+
         # Compute variance and standard deviation.
         chunked_var = chunked_mean_sq - chunked_mean * chunked_mean
         chunked_std = torch.sqrt(torch.clamp(chunked_var, min=0.) + self.eps)
-        
+
         # Normalize: subtract mean and (optionally) scale by std.
         x_norm = x - chunked_mean
         if self.scale_var:
             x_norm = x_norm / chunked_std
-        
+
         if squeeze_back:
             x_norm = x_norm.squeeze(1)
         return x_norm
+
 
 class GlobalNorm1d(nn.Module):
     def __init__(self, num_features, eps=1e-5, update_steps=None, sync=True):
         """
         Custom BatchNorm1d module that accumulates statistics over multiple steps.
-        
+
         Args:
             num_features (int): Number of features or channels.
             eps (float): A small value added to the denominator for numerical stability.
@@ -539,7 +529,7 @@ class GlobalNorm1d(nn.Module):
         self.update_steps = update_steps
         self.sync = sync
         self.eps = eps
-        
+
         # Running mean and variance are not learnable parameters
         self.register_buffer('running_mean', torch.zeros(num_features))
         self.register_buffer('running_var', torch.ones(num_features))
@@ -609,6 +599,7 @@ class GlobalNorm1d(nn.Module):
         x_hat = (x - mean) / torch.sqrt(var + self.eps)
         return x_hat
 
+
 class GlobalNormSignal(nn.Module):
     def __init__(self, eps=1e-5, update_steps=None, sync=True):
         super(GlobalNormSignal, self).__init__()
@@ -623,6 +614,7 @@ class GlobalNormSignal(nn.Module):
         if squeeze_back:
             x = x.squeeze(1)
         return x
+
 
 class TFMelBanksV2(nn.Module):
     def __init__(self, 
@@ -662,7 +654,7 @@ class TFMelBanksV2(nn.Module):
             )
         else:
             raise NotImplementedError()
-        
+
         self.torchfbank = torch.nn.Sequential(
             signal_norm,
             PreEmphasis() if do_preemph else nn.Identity(),
@@ -693,7 +685,7 @@ class TFMelBanksV2(nn.Module):
             self.spec_norm = GlobalNorm1d(n_mels,update_steps=norm_update_steps)
         else:
             raise NotImplementedError()
-            
+
         # self.spec_norm = nn.Identity()
         if do_spec_aug:
             self.specaug = FbankAug(
@@ -715,6 +707,7 @@ class TFMelBanksV2(nn.Module):
                     x = self.specaug(x)
         return x.to(xdtype)
 
+
 class TFSpectrogram(nn.Module):
     def __init__(self, 
         sample_rate=16000, 
@@ -730,11 +723,11 @@ class TFSpectrogram(nn.Module):
         mode = 'fft',
         fft_mode = 'abs',
         pool_freqs = (2,1),
-                 
+ 
         do_spec_aug=False,
         norm_signal=False,
         do_preemph=True,
-                 
+ 
         freq_start_bin = 0,
         num_apply_spec_aug = 1,
         freq_mask_width = (0, 8), 
@@ -744,9 +737,9 @@ class TFSpectrogram(nn.Module):
         super(TFSpectrogram, self).__init__()
         self.num_apply_spec_aug = num_apply_spec_aug
         self.spectrogram = torch.nn.Sequential(
-            NormalizeAudio() if norm_signal else nn.Identity(),            
-            PreEmphasis() if do_preemph else nn.Identity(),            
-            
+            NormalizeAudio(squeeze=True) if norm_signal else nn.Identity(),
+            PreEmphasis() if do_preemph else nn.Identity(),
+
             SpectralFeaturesTF(
                 frame_length = win_length,
                 frame_step = hop_length,
@@ -761,19 +754,19 @@ class TFSpectrogram(nn.Module):
 
                 normalize_spectrogram = False,
                 normalize_signal = False,
-                
+
                 fft_mode = 'abs',
                 log_mels = False,
                 sqrt_real_imag = False,
                 return_img = False,
             )
         )
-        
+
         if pool_freqs is not None:
             self.pool_freq = nn.AvgPool2d(pool_freqs, stride=pool_freqs)
         else:
             self.pool_freq = nn.Identity()
-            
+
         self.eps = eps
         if do_spec_aug:
             self.specaug = FbankAug(

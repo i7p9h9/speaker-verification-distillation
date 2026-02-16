@@ -1,16 +1,14 @@
-import typing as tp
 import math
-
+import typing as tp
 from dataclasses import asdict
 
-import torch
 import lightning as pl
-
+import torch
 from torch import nn
 
-from voicesdk.distillation.loss import ModelOutput
-from voicesdk.distillation.loss import DFLossBase, LossDistillationBase
+from voicesdk.distillation.loss import DFLossBase, LossDistillationBase, ModelOutput
 from voicesdk.distillation.validation import ValidatorBase
+
 from .flow_context import TrainingFlowContext
 
 
@@ -62,7 +60,7 @@ class DistillationLightningModule(pl.LightningModule):
             param.requires_grad = False
 
         # Save hyperparameters
-        self.save_hyperparameters(ignore=['teacher_model', 'student_model', 'loss_fn', 'validators'])
+        self.save_hyperparameters(ignore=["teacher_model", "student_model", "loss_fn", "validators"])
 
         # Training context
         self._current_context: tp.Optional[TrainingFlowContext] = None
@@ -116,7 +114,7 @@ class DistillationLightningModule(pl.LightningModule):
         )
 
         # Add to context
-        self._current_context.add_loss('distillation', loss_result)
+        self._current_context.add_loss("distillation", loss_result)
 
         # Log losses
         self._log_training_losses(loss_result)
@@ -134,7 +132,7 @@ class DistillationLightningModule(pl.LightningModule):
                     value,
                     on_step=True,
                     on_epoch=True,
-                    prog_bar=(key == 'value'),
+                    prog_bar=(key == "value"),
                     logger=True,
                 )
 
@@ -205,10 +203,10 @@ class DistillationLightningModule(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
         return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'interval': 'step',
-                'frequency': 1,
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
             },
         }
