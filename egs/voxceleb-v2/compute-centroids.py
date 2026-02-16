@@ -16,8 +16,8 @@ The process:
 """
 
 import json
-import typing as tp
 import os
+import typing as tp
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +29,7 @@ import torch.nn.functional as F
 import yaml
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from tqdm import tqdm
+from voicesdk.distillation.nn.arch import ResNetTF
 
 from voicesdk.distillation import ModelOutput
 
@@ -100,7 +101,11 @@ def get_model() -> nn.Module:
     cfg = read_yaml(os.path.join(__file__, "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"))
     state_dict_teacher = torch.load("data/ckpt/rn100_v016_flr_vox4_v2/model.pt", map_location=torch.device("cpu"))
 
-    pass
+    model_teacher = ResNetTF(**cfg["model_args"])
+    model_teacher.eval()
+    model_teacher.load_state_dict(state_dict_teacher, strict=True)
+
+    return model_teacher
 
 
 # =============================================================================
