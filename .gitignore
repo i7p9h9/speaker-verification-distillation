@@ -19,6 +19,9 @@ data/*
 !data/.gitkeep
 !data/test/
 
+egs/voxceleb-v2/data/ckpt/
+
+
 # Distribution / packaging
 .Python
 build/

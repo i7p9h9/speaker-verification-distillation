@@ -1,11 +1,15 @@
 import typing as tp
+
 import numpy as np
 import torch
 from torch import nn
 
-from voicesdk.distillation.compute.metrics import compute_eer
-from ._base import EmbeddingValidatorBase
+from voicesdk.distillation.compute.helpers import cosine_similarity
+from voicesdk.distillation.compute.metrics import compute_eer, compute_min_dcf
+
 from ..dataflow.metrics import DFMetricsSpeakerVerification
+from ._base import EmbeddingValidatorBase
+from ._types import ValidationTrial
 
 
 class TrialBasedValidator(EmbeddingValidatorBase):
@@ -19,7 +23,7 @@ class TrialBasedValidator(EmbeddingValidatorBase):
     def __init__(
         self,
         name: str,
-        trials: tp.List[str],
+        trials: tp.List[ValidationTrial],
         file_to_idx: tp.Dict[str, int],
         **kwargs,
     ):
@@ -48,21 +52,14 @@ class TrialBasedValidator(EmbeddingValidatorBase):
         scores_imposter = []
 
         for trial in self.trials:
-            parts = trial.strip().split()
-            if len(parts) != 3:
+            if trial.trial_left not in self.file_to_idx or trial.trial_right not in self.file_to_idx:
                 continue
 
-            target_label, file1, file2 = parts
-
-            if file1 not in self.file_to_idx or file2 not in self.file_to_idx:
-                continue
-
-            idx1 = self.file_to_idx[file1]
-            idx2 = self.file_to_idx[file2]
-
+            idx1 = self.file_to_idx[trial.trial_left]
+            idx2 = self.file_to_idx[trial.trial_right]
             score = cosine_similarity(embeddings[idx1], embeddings[idx2])
 
-            if target_label == '1':
+            if trial.is_target:
                 scores_target.append(score)
             else:
                 scores_imposter.append(score)

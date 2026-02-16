@@ -1,3 +1,4 @@
 [flake8]
 max-line-length = 120
-extend-ignore = E203, W503, E121, C0116
+extend-ignore = E203, W503, E121, C0115, C0116
+generated-members = torch.*
