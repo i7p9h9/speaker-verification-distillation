@@ -4,10 +4,10 @@ import numpy as np
 import torch
 from torch import nn
 
+from validation.dataflow import DFMetricsSpeakerVerification
 from voicesdk.distillation.compute.helpers import cosine_similarity
 from voicesdk.distillation.compute.metrics import compute_eer, compute_min_dcf
 
-from ..dataflow.metrics import DFMetricsSpeakerVerification
 from ._base import EmbeddingValidatorBase
 from ._types import ValidationTrial
 
@@ -24,7 +24,7 @@ class TrialBasedValidator(EmbeddingValidatorBase):
         self,
         name: str,
         trials: tp.List[ValidationTrial],
-        file_to_idx: tp.Dict[str, int],
+        trial_to_idx: tp.Dict[str, int],
         **kwargs,
     ):
         """
@@ -36,7 +36,7 @@ class TrialBasedValidator(EmbeddingValidatorBase):
         """
         super().__init__(name=name, **kwargs)
         self.trials = trials
-        self.file_to_idx = file_to_idx
+        self.trial_to_idx = trial_to_idx
 
     def _evaluate_trials(
         self,
@@ -52,11 +52,11 @@ class TrialBasedValidator(EmbeddingValidatorBase):
         scores_imposter = []
 
         for trial in self.trials:
-            if trial.trial_left not in self.file_to_idx or trial.trial_right not in self.file_to_idx:
+            if trial.trial_left not in self.trial_to_idx or trial.trial_right not in self.trial_to_idx:
                 continue
 
-            idx1 = self.file_to_idx[trial.trial_left]
-            idx2 = self.file_to_idx[trial.trial_right]
+            idx1 = self.trial_to_idx[trial.trial_left]
+            idx2 = self.trial_to_idx[trial.trial_right]
             score = cosine_similarity(embeddings[idx1], embeddings[idx2])
 
             if trial.is_target:

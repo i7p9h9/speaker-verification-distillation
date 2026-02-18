@@ -15,7 +15,7 @@ class DFMetricsBase:
     def to_line(self) -> str:
         """Convert metrics to single line string for logging."""
         items = [f"{k}={v}" for k, v in self.to_dict().items() if k != 'timestamp']
-        return f"[{self.timestamp}] " + " | ".join(items)
+        return f"[{self.timestamp}] " + "\n".join(items)
 
     def __str__(self) -> str:
         return self.to_line()

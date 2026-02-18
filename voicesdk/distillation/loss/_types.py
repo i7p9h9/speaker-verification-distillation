@@ -17,6 +17,9 @@ class DFLossBase:
     def item(self) -> float:
         return self.value.item()
 
+    def detach(self) -> torch.Tensor:
+        return self.value.detach()
+
 
 @dataclass
 class ModelOutput:

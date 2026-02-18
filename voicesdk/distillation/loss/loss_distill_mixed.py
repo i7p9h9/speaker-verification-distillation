@@ -8,7 +8,7 @@ from .dataflow import DFLossDistillationMixed
 from ._types import LossDistillationBase
 
 
-class MixedDistillationLoss(LossDistillationBase):
+class LossMixedDistillation(LossDistillationBase):
     """
     Combined logits and embeddings distillation loss.
     """

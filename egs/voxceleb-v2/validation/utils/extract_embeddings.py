@@ -1,10 +1,8 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-
-from torch.utils.data import DataLoader, Dataset
 from torch import nn
-
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 
@@ -89,6 +87,8 @@ def extract_embeddings_with_aggregation(
     Returns:
         Array of aggregated embeddings with shape (num_samples, embedding_dim)
     """
+    state_traing: bool = model.training
+
     model.eval()
     embeddings_list = []
 
@@ -141,5 +141,8 @@ def extract_embeddings_with_aggregation(
             aggregated = aggregated / (np.linalg.norm(aggregated) + 1e-8)
 
         embeddings_list.append(aggregated)
+
+    if state_traing:
+        model.train()
 
     return np.stack(embeddings_list, axis=0)

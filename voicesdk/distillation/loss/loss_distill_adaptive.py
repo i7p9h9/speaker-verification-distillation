@@ -3,10 +3,10 @@ import typing as tp
 import torch
 from torch import nn
 
-from .loss_distill_embeddings import LossDistillationEmbeddings
-from .loss_distill_logits import LossDistillationLogits
 from ._types import LossDistillationBase, ModelOutput
 from .dataflow import DFLossDistillationWithTarget
+from .loss_distill_embeddings import LossDistillationEmbeddings
+from .loss_distill_logits import LossDistillationLogits
 
 
 class LossDistillationAdaptive(LossDistillationBase):

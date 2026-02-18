@@ -1,8 +1,7 @@
-import typing as tp
 import json
-
-from pathlib import Path
+import typing as tp
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import torch
 from torch import nn

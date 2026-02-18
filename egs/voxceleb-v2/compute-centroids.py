@@ -40,7 +40,6 @@ from voicesdk.nn.arch import ResNetTF
 # Configuration
 # =============================================================================
 
-
 @dataclass
 class TeacherPrepConfig:
     """Configuration for teacher model preparation."""
@@ -54,17 +53,21 @@ class TeacherPrepConfig:
 
     # Audio settings
     sample_rate: int = 16000
-    norm_type: str = "std"
+    norm_type: str = 'std'
 
     # Processing
-    device: str = "cuda"
+    device: str = 'cuda'
 
     # Method: 'lda' or 'centroid'
-    method: str = "lda"
+    method: str = 'lda'
+
+    # Data limits (None = no limit)
+    max_files_per_utterance: tp.Optional[int] = None
+    max_utterances_per_speaker: tp.Optional[int] = None
 
     # LDA settings
     lda_n_components: tp.Optional[int] = None  # None = num_classes - 1
-    lda_solver: str = "svd"  # 'svd', 'lsqr', 'eigen'
+    lda_solver: str = 'svd'  # 'svd', 'lsqr', 'eigen'
 
     # Centroid settings
     centroid_normalize: bool = True
@@ -77,7 +80,6 @@ class TeacherPrepConfig:
 # =============================================================================
 # Model Placeholder
 # =============================================================================
-
 
 def read_yaml(yaml_path: str) -> dict:
     with open(yaml_path, "r") as f:
@@ -114,11 +116,9 @@ def get_model() -> nn.Module:
 # Data Collection
 # =============================================================================
 
-
 @dataclass
 class FileInfo:
     """Information about a single audio file."""
-
     filepath: str
     speaker_id: str
     utterance_id: str
@@ -128,7 +128,6 @@ class FileInfo:
 @dataclass
 class UtteranceEmbedding:
     """Aggregated embedding for an utterance."""
-
     speaker_id: str
     utterance_id: str
     embedding: np.ndarray
@@ -136,72 +135,143 @@ class UtteranceEmbedding:
     num_files: int
 
 
-def discover_voxceleb2_files(data_dir: str) -> tp.List[FileInfo]:
+def discover_voxceleb2_files(
+    data_dir: str,
+    max_files_per_utterance: tp.Optional[int] = None,
+    max_utterances_per_speaker: tp.Optional[int] = None,
+) -> tp.Dict[str, tp.Dict[str, tp.List[FileInfo]]]:
     """
     Discover all wav files in VoxCeleb2 directory structure.
 
     Expected structure: data_dir/speaker_id/utterance_id/*.wav
+
+    Returns:
+        Nested dict: speaker_id -> utterance_id -> list of FileInfo
     """
-    files = []
     data_path = Path(data_dir)
 
+    # Structure: speaker_id -> utterance_id -> [files]
+    speaker_utterances: tp.Dict[str, tp.Dict[str, tp.List[FileInfo]]] = defaultdict(lambda: defaultdict(list))
+
     print(f"Discovering files in {data_dir}...")
+
+    total_files = 0
+    total_utterances = 0
 
     for speaker_dir in tqdm(sorted(data_path.iterdir()), desc="Scanning speakers"):
         if not speaker_dir.is_dir():
             continue
 
         speaker_id = speaker_dir.name
+        utterance_count = 0
 
-        for utterance_dir in speaker_dir.iterdir():
+        for utterance_dir in sorted(speaker_dir.iterdir()):
             if not utterance_dir.is_dir():
                 continue
 
-            utterance_id = utterance_dir.name
+            # Check utterance limit
+            if max_utterances_per_speaker is not None and utterance_count >= max_utterances_per_speaker:
+                break
 
-            for wav_file in utterance_dir.glob("*.wav"):
-                files.append(
-                    FileInfo(
-                        filepath=str(wav_file),
-                        speaker_id=speaker_id,
-                        utterance_id=f"{speaker_id}/{utterance_id}",
-                    )
-                )
+            utterance_id = f"{speaker_id}/{utterance_dir.name}"
 
-    print(f"Found {len(files)} files from {len(set(f.speaker_id for f in files))} speakers")
-    return files
+            wav_files = sorted(utterance_dir.glob("*.wav"))
+
+            # Apply file limit per utterance
+            if max_files_per_utterance is not None:
+                wav_files = wav_files[:max_files_per_utterance]
+
+            for wav_file in wav_files:
+                speaker_utterances[speaker_id][utterance_id].append(FileInfo(
+                    filepath=str(wav_file),
+                    speaker_id=speaker_id,
+                    utterance_id=utterance_id,
+                ))
+                total_files += 1
+
+            if wav_files:
+                utterance_count += 1
+                total_utterances += 1
+
+    num_speakers = len(speaker_utterances)
+    print(f"Found {total_files} files, {total_utterances} utterances from {num_speakers} speakers")
+
+    if max_files_per_utterance is not None:
+        print(f"  (limited to {max_files_per_utterance} files per utterance)")
+    if max_utterances_per_speaker is not None:
+        print(f"  (limited to {max_utterances_per_speaker} utterances per speaker)")
+
+    return dict(speaker_utterances)
 
 
 # =============================================================================
-# Embedding Extraction
+# Embedding Extraction with Online Aggregation
 # =============================================================================
 
-
-@dataclass
-class ExtractedEmbedding:
-    """Single extracted embedding with metadata."""
-
-    filepath: str
-    speaker_id: str
-    utterance_id: str
-    embedding: np.ndarray
-    duration: float
-
-
-def extract_embeddings_for_files(
+def extract_utterance_embeddings(
     model: nn.Module,
-    files: tp.List[FileInfo],
+    speaker_utterances: tp.Dict[str, tp.Dict[str, tp.List[FileInfo]]],
     config: TeacherPrepConfig,
-) -> tp.List[ExtractedEmbedding]:
+) -> tp.List[UtteranceEmbedding]:
     """
-    Extract embeddings for all files.
+    Extract embeddings for all files with online aggregation per utterance.
+
+    Memory-efficient: aggregates embeddings immediately per utterance,
+    never storing all file embeddings in memory.
+
     Uses length_segment_ms=None for full-length extraction (best quality).
     """
     device = torch.device(config.device)
     model = model.to(device)
     model.eval()
 
+    utterance_embeddings: tp.List[UtteranceEmbedding] = []
+
+    # Count total utterances for progress bar
+    total_utterances = sum(len(utts) for utts in speaker_utterances.values())
+
+    print("Extracting embeddings with online aggregation...")
+
+    with tqdm(total=total_utterances, desc="Processing utterances") as pbar:
+        for speaker_id, utterances in speaker_utterances.items():
+            for utterance_id, files in utterances.items():
+                # Process all files for this utterance and aggregate immediately
+                utterance_emb = _extract_and_aggregate_utterance(
+                    model=model,
+                    files=files,
+                    config=config,
+                    device=device,
+                )
+
+                if utterance_emb is not None:
+                    utterance_embeddings.append(utterance_emb)
+
+                pbar.update(1)
+
+    print(f"Extracted {len(utterance_embeddings)} utterance embeddings")
+    return utterance_embeddings
+
+
+def _extract_and_aggregate_utterance(
+    model: nn.Module,
+    files: tp.List[FileInfo],
+    config: TeacherPrepConfig,
+    device: torch.device,
+) -> tp.Optional[UtteranceEmbedding]:
+    """
+    Extract embeddings for a single utterance and aggregate them.
+
+    Weighted average by audio duration.
+    """
+    if not files:
+        return None
+
+    speaker_id = files[0].speaker_id
+    utterance_id = files[0].utterance_id
+
     filepaths = [f.filepath for f in files]
+
+    # Create dataset for this utterance's files
     dataset = WavDataset(
         wav_scp=filepaths,
         norm_type=config.norm_type,
@@ -210,12 +280,13 @@ def extract_embeddings_for_files(
         sample_rate=config.sample_rate,
     )
 
-    embeddings = []
+    # Accumulate weighted embeddings
+    weighted_sum: tp.Optional[np.ndarray] = None
+    total_duration = 0.0
+    num_files = 0
 
-    print("Extracting embeddings...")
-    for idx in tqdm(range(len(dataset)), desc="Extracting"):
+    for idx in range(len(dataset)):
         sample = dataset[idx]
-        file_info = files[idx]
 
         segments = sample.segments
         if isinstance(segments, np.ndarray):
@@ -229,79 +300,58 @@ def extract_embeddings_for_files(
         with torch.no_grad():
             output = model(segments)
 
-            if hasattr(output, "embeddings") and output.embeddings is not None:
+            if hasattr(output, 'embeddings') and output.embeddings is not None:
                 if isinstance(output.embeddings, list):
                     emb = output.embeddings[-1]
                 else:
                     emb = output.embeddings
-            elif hasattr(output, "logits"):
+            elif hasattr(output, 'logits'):
                 emb = output.logits
             else:
                 emb = output
 
+            # Handle multi-segment output
             if emb.dim() > 2:
                 emb = emb.mean(dim=1)
             elif emb.dim() == 2 and emb.size(0) > 1:
-                weights = torch.tensor(sample.segments_weights, device=device, dtype=emb.dtype)
+                weights = torch.tensor(
+                    sample.segments_weights,
+                    device=device,
+                    dtype=emb.dtype
+                )
                 emb = (emb * weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
             emb = emb.squeeze(0).cpu().numpy()
 
-        embeddings.append(
-            ExtractedEmbedding(
-                filepath=file_info.filepath,
-                speaker_id=file_info.speaker_id,
-                utterance_id=file_info.utterance_id,
-                embedding=emb,
-                duration=sample.total_duration,
-            )
-        )
+        duration = sample.total_duration
 
-    return embeddings
-
-
-def aggregate_embeddings_by_utterance(
-    embeddings: tp.List[ExtractedEmbedding],
-) -> tp.List[UtteranceEmbedding]:
-    """Aggregate embeddings per utterance using weighted average by duration."""
-    utterance_groups: tp.Dict[str, tp.List[ExtractedEmbedding]] = defaultdict(list)
-    for emb in embeddings:
-        utterance_groups[emb.utterance_id].append(emb)
-
-    aggregated = []
-
-    print("Aggregating embeddings by utterance...")
-    for utterance_id, group in tqdm(utterance_groups.items(), desc="Aggregating"):
-        speaker_id = group[0].speaker_id
-        total_duration = sum(e.duration for e in group)
-
-        if total_duration > 0:
-            weighted_sum = np.zeros_like(group[0].embedding)
-            for e in group:
-                weight = e.duration / total_duration
-                weighted_sum += weight * e.embedding
-            aggregated_emb = weighted_sum
+        # Accumulate weighted embedding
+        if weighted_sum is None:
+            weighted_sum = emb * duration
         else:
-            aggregated_emb = np.mean([e.embedding for e in group], axis=0)
+            weighted_sum += emb * duration
 
-        aggregated.append(
-            UtteranceEmbedding(
-                speaker_id=speaker_id,
-                utterance_id=utterance_id,
-                embedding=aggregated_emb,
-                total_duration=total_duration,
-                num_files=len(group),
-            )
-        )
+        total_duration += duration
+        num_files += 1
 
-    print(f"Aggregated to {len(aggregated)} utterances")
-    return aggregated
+    if weighted_sum is None or total_duration == 0:
+        return None
+
+    # Compute weighted average
+    aggregated_emb = weighted_sum / total_duration
+
+    return UtteranceEmbedding(
+        speaker_id=speaker_id,
+        utterance_id=utterance_id,
+        embedding=aggregated_emb,
+        total_duration=total_duration,
+        num_files=num_files,
+    )
 
 
 # =============================================================================
 # Head Computation
 # =============================================================================
-
 
 def compute_lda_head(
     utterance_embeddings: tp.List[UtteranceEmbedding],
@@ -398,7 +448,6 @@ def compute_centroid_head(
 # Main Preparation Function
 # =============================================================================
 
-
 def prepare_teacher_head(config: TeacherPrepConfig) -> nn.Module:
     """
     Prepare classification head for teacher model.
@@ -412,6 +461,10 @@ def prepare_teacher_head(config: TeacherPrepConfig) -> nn.Module:
     print(f"Method: {config.method}")
     print(f"Data directory: {config.data_dir}")
     print(f"Output directory: {config.output_dir}")
+    if config.max_files_per_utterance:
+        print(f"Max files per utterance: {config.max_files_per_utterance}")
+    if config.max_utterances_per_speaker:
+        print(f"Max utterances per speaker: {config.max_utterances_per_speaker}")
     print()
 
     # 1. Load model
@@ -420,16 +473,17 @@ def prepare_teacher_head(config: TeacherPrepConfig) -> nn.Module:
     if model is None:
         raise ValueError("get_model() returned None. Please implement model loading.")
 
-    # 2. Discover files
-    files = discover_voxceleb2_files(config.data_dir)
+    # 2. Discover files (grouped by speaker/utterance)
+    speaker_utterances = discover_voxceleb2_files(
+        config.data_dir,
+        max_files_per_utterance=config.max_files_per_utterance,
+        max_utterances_per_speaker=config.max_utterances_per_speaker,
+    )
 
-    # 3. Extract embeddings
-    embeddings = extract_embeddings_for_files(model, files, config)
+    # 3. Extract embeddings with online aggregation per utterance
+    utterance_embeddings = extract_utterance_embeddings(model, speaker_utterances, config)
 
-    # 4. Aggregate by utterance
-    utterance_embeddings = aggregate_embeddings_by_utterance(embeddings)
-
-    # 5. Compute classification head
+    # 4. Compute classification head
     output_path = Path(config.output_dir)
 
     if config.method == "lda":
@@ -457,26 +511,28 @@ def prepare_teacher_head(config: TeacherPrepConfig) -> nn.Module:
     else:
         raise ValueError(f"Unknown method: {config.method}")
 
-    # 6. Save head state dict
-    torch.save(head.state_dict(), output_path / f"{head_name}.pt")
+    # 5. Save head state dict
+    torch.save(head.state_dict(), output_path / f'{head_name}.pt')
     print(f"Head state dict saved to {output_path / f'{head_name}.pt'}")
 
-    # 7. Save speaker mapping
-    head.save_speaker_mapping(str(output_path / f"{head_name}_speakers.json"))
+    # 6. Save speaker mapping
+    head.save_speaker_mapping(str(output_path / f'{head_name}_speakers.json'))
     print(f"Speaker mapping saved to {output_path / f'{head_name}_speakers.json'}")
 
-    # 8. Save config
+    # 7. Save config
     config_dict = {
-        "method": config.method,
-        "embedding_dim": head.embedding_dim,
-        "num_classes": head.num_classes,
+        'method': config.method,
+        'embedding_dim': head.embedding_dim,
+        'num_classes': head.num_classes,
+        'max_files_per_utterance': config.max_files_per_utterance,
+        'max_utterances_per_speaker': config.max_utterances_per_speaker,
     }
-    if config.method == "lda":
-        config_dict["n_components"] = head.n_components
+    if config.method == 'lda':
+        config_dict['n_components'] = head.n_components
     else:
-        config_dict["temperature"] = head.temperature
+        config_dict['temperature'] = head.temperature
 
-    with open(output_path / "config.json", "w") as f:
+    with open(output_path / 'config.json', 'w') as f:
         json.dump(config_dict, f, indent=2)
 
     print()
@@ -504,12 +560,12 @@ def load_head(
     Returns:
         Classification head layer
     """
-    state_dict = torch.load(head_path, map_location="cpu")
+    state_dict = torch.load(head_path, map_location='cpu')
 
-    if method == "lda":
+    if method == 'lda':
         # Infer dimensions from state dict
-        projection = state_dict["projection"]
-        class_means = state_dict["class_means"]
+        projection = state_dict['projection']
+        class_means = state_dict['class_means']
         n_components, embedding_dim = projection.shape
         num_classes = class_means.shape[0]
 
@@ -518,9 +574,9 @@ def load_head(
             num_classes=num_classes,
             n_components=n_components,
         )
-    elif method == "centroid":
+    elif method == 'centroid':
         # Infer dimensions from state dict
-        centroids = state_dict["centroids.weight"]
+        centroids = state_dict['centroids.weight']
         num_classes, embedding_dim = centroids.shape
 
         head = HeadClassificationCentroids(
@@ -542,21 +598,29 @@ def load_head(
 # CLI Entry Point
 # =============================================================================
 
-
 def main():
     """Main entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Prepare teacher classification head for distillation")
-    parser.add_argument("--data-dir", type=str, default="data/vox2", help="Path to VoxCeleb2 data")
-    parser.add_argument("--output-dir", type=str, default="teacher_prepared", help="Output directory")
-    parser.add_argument(
-        "--method", type=str, choices=["lda", "centroid"], default="lda", help="Classification head method"
-    )
-    parser.add_argument("--embedding-dim", type=int, default=256, help="Embedding dimension")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to use")
-    parser.add_argument("--norm-type", type=str, default="std", help="Audio normalization type")
-    parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for centroid method")
+    parser = argparse.ArgumentParser(description='Prepare teacher classification head for distillation')
+    parser.add_argument('--data-dir', type=str, default='data/vox2',
+                        help='Path to VoxCeleb2 data')
+    parser.add_argument('--output-dir', type=str, default='teacher_prepared',
+                        help='Output directory')
+    parser.add_argument('--method', type=str, choices=['lda', 'centroid', 'both'], default='lda',
+                        help='Classification head method')
+    parser.add_argument('--embedding-dim', type=int, default=256,
+                        help='Embedding dimension')
+    parser.add_argument('--device', type=str, default='cuda',
+                        help='Device to use')
+    parser.add_argument('--norm-type', type=str, default='std',
+                        help='Audio normalization type')
+    parser.add_argument('--temperature', type=float, default=1.0,
+                        help='Temperature for centroid method')
+    parser.add_argument('--max-files-per-utterance', type=int, default=None,
+                        help='Maximum files per utterance (default: no limit)')
+    parser.add_argument('--max-utterances-per-speaker', type=int, default=None,
+                        help='Maximum utterances per speaker (default: no limit)')
 
     args = parser.parse_args()
 
@@ -568,10 +632,12 @@ def main():
         device=args.device,
         norm_type=args.norm_type,
         centroid_temperature=args.temperature,
+        max_files_per_utterance=args.max_files_per_utterance,
+        max_utterances_per_speaker=args.max_utterances_per_speaker,
     )
 
     prepare_teacher_head(config)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

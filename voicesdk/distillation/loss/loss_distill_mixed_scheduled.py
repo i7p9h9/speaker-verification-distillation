@@ -11,7 +11,7 @@ from .dataflow import DFLossDistillationMixed
 from ._types import LossDistillationBase
 
 
-class ScheduledMixedDistillationLoss(LossDistillationBase):
+class LossScheduledMixedDistillation(LossDistillationBase):
     """
     Mixed distillation loss with scheduled weight changes over training.
     """

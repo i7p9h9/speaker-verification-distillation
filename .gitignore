@@ -19,8 +19,13 @@ data/*
 !data/.gitkeep
 !data/test/
 
-egs/voxceleb-v2/data/ckpt/
-
+# egs/voxceleb-v2/data/*
+# !egs/voxceleb-v2/data/cfg-models/*
+egs/voxceleb-v2/data/centroids
+egs/voxceleb-v2/data/ckpt
+egs/voxceleb-v2/data/exps
+egs/voxceleb-v2/data/centroidsexps
+egs/voxceleb-v2/data/test_vox
 
 # Distribution / packaging
 .Python

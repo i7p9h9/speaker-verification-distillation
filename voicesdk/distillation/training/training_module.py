@@ -1,11 +1,12 @@
 import math
 import typing as tp
-from dataclasses import asdict
+from dataclasses import asdict, fields
 
-import lightning as pl
+import pytorch_lightning as pl
 import torch
 from torch import nn
 
+from voicesdk.distillation.data import BatchSegments
 from voicesdk.distillation.loss import DFLossBase, LossDistillationBase, ModelOutput
 from voicesdk.distillation.validation import ValidatorBase
 
@@ -26,6 +27,9 @@ class DistillationLightningModule(pl.LightningModule):
         learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
         warmup_steps: int = 1000,
+        warm_from_zero: bool = False,
+        final_lr: float = 1e-4,
+        scale_ratio: float = 1.0,
         total_steps: tp.Optional[int] = None,
         log_every_n_steps: int = 100,
     ):
@@ -51,7 +55,10 @@ class DistillationLightningModule(pl.LightningModule):
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
+        self.warm_from_zero = warm_from_zero
+        self.scale_ratio = scale_ratio
         self.total_steps = total_steps
+        self.final_lr = final_lr
         self.log_every_n_steps = log_every_n_steps
 
         # Freeze teacher model
@@ -71,7 +78,7 @@ class DistillationLightningModule(pl.LightningModule):
 
     def training_step(
         self,
-        batch: tp.Tuple[torch.Tensor, ...],
+        batch: BatchSegments,
         batch_idx: int,
     ) -> torch.Tensor:
         """
@@ -91,25 +98,18 @@ class DistillationLightningModule(pl.LightningModule):
             batch_idx=batch_idx,
         )
 
-        # Unpack batch
-        if len(batch) == 2:
-            inputs, targets = batch
-        else:
-            inputs = batch[0]
-            targets = None
-
         # Get teacher outputs (no gradients)
         with torch.no_grad():
-            teacher_output = self.teacher_model(inputs)
+            teacher_output = self.teacher_model(batch.segments)
 
         # Get student outputs
-        student_output = self.student_model(inputs)
+        student_output = self.student_model(batch.segments)
 
         # Compute loss
         loss_result = self.loss_fn(
             student_output=student_output,
             teacher_output=teacher_output,
-            targets=targets,
+            targets=batch.target,
             step=self.global_step,
         )
 
@@ -123,16 +123,15 @@ class DistillationLightningModule(pl.LightningModule):
 
     def _log_training_losses(self, loss_result: DFLossBase) -> None:
         """Log training losses to TensorBoard."""
-        loss_dict = asdict(loss_result)
-
-        for key, value in loss_dict.items():
+        for field in fields(loss_result):
+            value = getattr(loss_result, field.name)
             if isinstance(value, torch.Tensor):
                 self.log(
-                    f"train/{key}",
+                    f"train/{field.name}",
                     value,
                     on_step=True,
                     on_epoch=True,
-                    prog_bar=(key == "value"),
+                    prog_bar=(field.name == "value"),
                     logger=True,
                 )
 
@@ -185,14 +184,32 @@ class DistillationLightningModule(pl.LightningModule):
 
     def configure_optimizers(self) -> tp.Dict[str, tp.Any]:
         """Configure optimizer and scheduler."""
-        optimizer = torch.optim.AdamW(
+        optimizer = torch.optim.SGD(
             self.student_model.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
+            nesterov=True
         )
 
-        # Warmup + cosine decay scheduler
         def lr_lambda(step: int) -> float:
+            """Exponential decay with linear warmup."""
+            if step < self.warmup_steps:
+                if self.warm_from_zero:
+                    coeff = step / max(1, self.warmup_steps)
+                elif self.scale_ratio > 1.0:
+                    coeff = (self.scale_ratio - 1.0) * step / max(1, self.warmup_steps) + 1.0
+                else:
+                    coeff = self.scale_ratio
+            else:
+                coeff = self.scale_ratio
+
+            decay = math.exp(
+                (step / max(1, self.total_steps)) *
+                math.log(self.final_lr / self.learning_rate)
+            )
+            return coeff * decay
+
+        def lr_lambda_cosine(step: int) -> float:
             if step < self.warmup_steps:
                 return step / max(1, self.warmup_steps)
             if self.total_steps is None:

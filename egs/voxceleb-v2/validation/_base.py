@@ -2,18 +2,18 @@ import typing as tp
 
 import numpy as np
 import torch
-
-from torch.utils import nn
+from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from voicesdk.distillation.validation import ValidatorBase
+
 from .utils.extract_embeddings import extract_embeddings, extract_embeddings_with_aggregation
 
 
 class EmbeddingValidatorBase(ValidatorBase):
     """
     Base class for validators that work with embeddings.
-    
+
     Provides common functionality for embedding extraction and trial evaluation.
     """
 
