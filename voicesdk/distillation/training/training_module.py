@@ -138,6 +138,7 @@ class DistillationLightningModule(pl.LightningModule):
     def on_validation_epoch_start(self) -> None:
         """Called at the start of validation epoch."""
         self.student_model.eval()
+        print("on_validation_epoch_start")
 
     def validation_step(
         self,
@@ -150,8 +151,11 @@ class DistillationLightningModule(pl.LightningModule):
         """
         return None
 
-    def on_validation_epoch_end(self) -> None:
+    # def on_epoch_end(self):
+    def on_train_epoch_end(self) -> None:
         """Run validators at the end of each validation epoch."""
+        self.student_model.eval()
+
         if not self.validators:
             return
 
@@ -177,6 +181,8 @@ class DistillationLightningModule(pl.LightningModule):
             # Print metrics
             print(f"\n[Validator: {validator.name}] {metrics.to_line()}")
 
+        self.student_model.train()
+
     def on_train_end(self) -> None:
         """Save validator histories at end of training."""
         for validator in self.validators:
@@ -184,11 +190,18 @@ class DistillationLightningModule(pl.LightningModule):
 
     def configure_optimizers(self) -> tp.Dict[str, tp.Any]:
         """Configure optimizer and scheduler."""
-        optimizer = torch.optim.SGD(
+        # optimizer = torch.optim.SGD(
+        #     self.student_model.parameters(),
+        #     lr=self.learning_rate,
+        #     weight_decay=self.weight_decay,
+        #     momentum=0.9,
+        #     nesterov=True
+        # )
+
+        optimizer = torch.optim.AdamW(
             self.student_model.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
-            nesterov=True
         )
 
         def lr_lambda(step: int) -> float:
@@ -217,7 +230,7 @@ class DistillationLightningModule(pl.LightningModule):
             progress = (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
             return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_cosine)
 
         return {
             "optimizer": optimizer,

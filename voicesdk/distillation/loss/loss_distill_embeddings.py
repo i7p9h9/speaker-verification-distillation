@@ -37,6 +37,13 @@ class LossDistillationEmbeddings(LossDistillationBase):
             self.loss_fn = nn.L1Loss()
         elif loss_type == 'cosine':
             self.loss_fn = lambda x, y: 1 - F.cosine_similarity(x, y, dim=-1).mean()  # pylint: disable=not-callable
+        elif loss_type == 'cosine_embedding':
+            self.loss_fn = lambda x, y: F.cosine_embedding_loss(x, y, target=1)
+        elif loss_type == 'cosine_log':
+            self.loss_fn = lambda x, y: -torch.log(
+                torch.clamp((1 + F.cosine_similarity(x, y, dim=-1)) / 2, min=1e-6)
+            ).mean()
+
         else:
             raise ValueError(f"Unknown loss type: {loss_type}")
 
