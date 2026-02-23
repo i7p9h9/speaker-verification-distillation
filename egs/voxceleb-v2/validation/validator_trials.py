@@ -85,8 +85,8 @@ class TrialBasedValidator(EmbeddingValidatorBase):
         return DFMetricsSpeakerVerification(
             eer=eer,
             eer_threshold=eer_threshold,
-            min_dcf_001=min_dcf_001,
-            min_dcf_01=min_dcf_01,
+            min_dcf_001=min_dcf_001[0],
+            min_dcf_01=min_dcf_01[0],
             num_target_trials=len(scores_target),
             num_imposter_trials=len(scores_imposter),
         )

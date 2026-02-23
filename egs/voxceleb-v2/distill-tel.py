@@ -22,7 +22,7 @@ from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
 STEPS_PER_EPOCH = 5000
 MAX_EPOCH = 25
 
-TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
+TEACHER_CFG = "data/cfg-models/rn100_tel.yaml"
 TEACHER_CKPT = "data/ckpt/rn100_tel4/model_44.pt"
 
 STUDENT_CFG = "data/cfg-models/redimnet_L.yaml"
