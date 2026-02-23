@@ -1,0 +1,64 @@
+model: ResNetTF
+model_args:
+  backbone_cfg:
+    block_setup:
+    - !!python/tuple
+      - 128
+      - 6
+      - 1
+      - 128
+      - 96
+    - !!python/tuple
+      - 128
+      - 8
+      - 2
+      - 128
+      - 48
+    - !!python/tuple
+      - 256
+      - 12
+      - 2
+      - 128
+      - 24
+    - !!python/tuple
+      - 256
+      - 3
+      - 2
+      - 128
+      - 12
+    conv_type: base
+    init_conv_params:
+      in_channels: 1
+      kernel_size: 3
+      out_channels: 128
+      padding: 1
+      stride: 1
+    num_nodes_last_layer: null
+  bn_eps: 0.001
+  embedding_size: 256
+  features_cfg:
+    eps: 1.0e-06
+    fft_length: 512
+    fft_mode: abs
+    frame_length: 400
+    frame_step: 160
+    high_freq: 7600
+    low_freq: 20
+    mode: logmelbanks
+    normalize_signal: mean_std
+    normalize_spectrogram: true
+    num_bins: 96
+    num_ceps: 30
+    sample_rate: 16000
+    shift_value: 0.0
+    trainable: false
+    window: hann
+  pooling_cfg:
+    add_context: true
+    add_statistics: true
+    num_features: 3072
+    reduction_mode: sum
+    reduction_ratio: 12
+    var2std_eps: 1.0e-12
+  pooling_type: SelfAttentionTF
+  post_pool_dims: 6144

@@ -7,9 +7,9 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
-from validation import TrialBasedValidator, ValidationTrial, VoxDataset
+from validation import AggregatedDataset, TrialBasedValidator, ValidationTrial, VoxDataset, WeightedDataset
 
-from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, collate_batch_segments_fn
+from voicesdk.distillation.data import AudioReaderFull, AudioReaderTelSimulated, collate_batch_segments_fn
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
@@ -23,20 +23,25 @@ STEPS_PER_EPOCH = 5000
 MAX_EPOCH = 25
 
 TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
-TEACHER_CKPT = "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"
+TEACHER_CKPT = "data/ckpt/rn100_tel4/model_44.pt"
 
-# STUDENT_CFG = "data/cfg-models/redimnet_L.yaml"
-STUDENT_CFG = "data/cfg-models/resnettf_50.yaml"
+STUDENT_CFG = "data/cfg-models/redimnet_L.yaml"
+STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
+# STUDENT_CFG = "data/cfg-models/resnettf_50.yaml"
 
 HEAD_CKPT = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid.pt"
 HEAD_SPEAKERS = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid_speakers.json"
 
-TRAIN_ROOT = "/media/ssd/voice/datasets/vox2/dev-16k/aac/"
+TRAIN_VOX = "/media/ssd/voice/datasets/vox2/dev-16k/aac/"
+TRAIN_SIGI = "/media/ssd/voice/datasets/spgispeech/"
+TRAIN_TIDY_1 = "/media/ssd/voice/datasets/TidyVoiceX/"
+TRAIN_TIDY_2 = "/media/ssd/voice/datasets/TidyVoiceX2/"
+
 VAL_ROOT = "/media/ssd/voice/datasets/vox1/test/wav"
 TRIALS_PATH = "data/test_vox/trials"
 
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "vox2-emb-cosine-002"
+EXPERIMENT_NAME = "tel-emb-cosine-003"
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +65,11 @@ def get_teacher() -> nn.Module:
 
 def get_student() -> nn.Module:
     cfg = read_yaml(STUDENT_CFG)
-    # model = ReDimNetWrap(**cfg["model_args"])
-    model = ResNetTF(**cfg["model_args"])
+    model = ReDimNetWrap(**cfg["model_args"])
+
+    if STUDENT_CKPT is not None:
+        model.load_state_dict(torch.load(STUDENT_CKPT))
+    # model = ResNetTF(**cfg["model_args"])
     return model
 
 
@@ -215,13 +223,32 @@ def main() -> None:
         segments_step_ms=4000,
         sample_rate=16000,
     )
-    reader_train = AudioReaderRandom(
+    reader_train = AudioReaderTelSimulated(
         norm_type="std",
         length_segment_ms=3000,
+        p_tel=0.5
     )
 
     dataset_val = VoxDataset(reader=reader_val, root=VAL_ROOT)
-    dataset_train = VoxDataset(reader=reader_train, root=TRAIN_ROOT)
+    dataset_train_list = [
+        WeightedDataset(
+            dataset=VoxDataset(reader=reader_train, root=TRAIN_VOX),
+            weight=0.4
+        ),
+        WeightedDataset(
+            dataset=VoxDataset(reader=reader_train, root=TRAIN_SIGI),
+            weight=0.3
+        ),
+        WeightedDataset(
+            dataset=VoxDataset(reader=reader_train, root=TRAIN_TIDY_1),
+            weight=0.2
+        ),
+        WeightedDataset(
+            dataset=VoxDataset(reader=reader_train, root=TRAIN_TIDY_2),
+            weight=0.1
+        ),
+    ]
+    dataset_train = AggregatedDataset(sources=dataset_train_list)
 
     loader_train = DataLoader(
         dataset=dataset_train,

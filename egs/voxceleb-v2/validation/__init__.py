@@ -1,11 +1,13 @@
 from ._base import ValidatorBase
 from ._types import ValidationTrial
-from .dataset import VoxDataset
+from .dataset import AggregatedDataset, VoxDataset, WeightedDataset
 from .validator_trials import TrialBasedValidator
 
 __all__ = [
     "ValidationTrial",
     "ValidatorBase",
     "TrialBasedValidator",
-    "VoxDataset"
+    "VoxDataset",
+    "AggregatedDataset",
+    "WeightedDataset"
 ]

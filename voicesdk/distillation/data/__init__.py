@@ -1,5 +1,12 @@
 from .collate.collate_segments import BatchSegments, collate_batch_segments_fn
-from .pipe import AudioReaderBase, AudioReaderFull, AudioReaderRandom, AudioSegments, WavDataset
+from .pipe import (
+    AudioReaderBase,
+    AudioReaderFull,
+    AudioReaderRandom,
+    AudioReaderTelSimulated,
+    AudioSegments,
+    WavDataset,
+)
 
 __all__ = [
     "WavDataset",
@@ -7,6 +14,7 @@ __all__ = [
     "AudioReaderBase",
     "AudioReaderFull",
     "AudioReaderRandom",
+    "AudioReaderTelSimulated",
 
     "BatchSegments",
     "collate_batch_segments_fn"

@@ -2,8 +2,8 @@ import typing as tp
 from pathlib import Path
 
 from torch.utils.data import Dataset
-from validation import ValidationTrial
 
+from validation import ValidationTrial
 from voicesdk.distillation.data import AudioReaderBase, AudioSegments, WavDataset
 from voicesdk.utils import find_files_recursive
 
