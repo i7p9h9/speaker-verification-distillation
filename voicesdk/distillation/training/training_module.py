@@ -12,6 +12,31 @@ from voicesdk.distillation.validation import ValidatorBase
 
 from .flow_context import TrainingFlowContext
 
+if tp.TYPE_CHECKING:
+    from audimentation import SequentialCompose
+
+
+def _augment_batch(
+    segments: torch.Tensor,
+    pipeline: "SequentialCompose",
+    sample_rate: int,
+) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+    """Apply augmentation pipeline to a batch.
+
+    Args:
+        segments:    Float tensor ``[N, L]``.
+        pipeline:    Augmentation pipeline (supports batched input natively).
+        sample_rate: Audio sample rate in Hz.
+
+    Returns:
+        ``(augmented, original)`` — both ``[N, L]``.
+    """
+    from audimentation import DataSample
+
+    sample = DataSample(signal=segments, original=segments.clone(), sample_rate=sample_rate)
+    result = pipeline(sample)
+    return result.output, result.original
+
 
 class DistillationLightningModule(pl.LightningModule):
     """
@@ -32,18 +57,28 @@ class DistillationLightningModule(pl.LightningModule):
         scale_ratio: float = 1.0,
         total_steps: tp.Optional[int] = None,
         log_every_n_steps: int = 100,
+        # --- augmentation ---
+        aug_pipeline: tp.Optional["SequentialCompose"] = None,
+        aug_teacher_original: bool = True,
+        aug_sample_rate: int = 16_000,
     ):
         """
         Args:
-            teacher_model: Pre-trained teacher model (frozen)
-            student_model: Student model to train
-            loss_fn: Distillation loss function
-            validators: List of validators to run after each epoch
-            learning_rate: Learning rate
-            weight_decay: Weight decay for optimizer
-            warmup_steps: Number of warmup steps for scheduler
-            total_steps: Total training steps (for scheduler)
-            log_every_n_steps: Log training metrics every N steps
+            teacher_model:        Pre-trained teacher model (frozen).
+            student_model:        Student model to train.
+            loss_fn:              Distillation loss function.
+            validators:           List of validators to run after each epoch.
+            learning_rate:        Learning rate.
+            weight_decay:         Weight decay for optimizer.
+            warmup_steps:         Number of warmup steps for scheduler.
+            total_steps:          Total training steps (for scheduler).
+            log_every_n_steps:    Log training metrics every N steps.
+            aug_pipeline:         Optional augmentation pipeline.  When ``None``
+                                  augmentation is skipped entirely (default behaviour).
+            aug_teacher_original: If ``True`` the teacher receives the clean signal;
+                                  if ``False`` it receives the augmented signal.
+                                  Has no effect when ``aug_pipeline`` is ``None``.
+            aug_sample_rate:      Sample rate passed to ``DataSample``.
         """
         super().__init__()
 
@@ -61,13 +96,17 @@ class DistillationLightningModule(pl.LightningModule):
         self.final_lr = final_lr
         self.log_every_n_steps = log_every_n_steps
 
+        self.aug_pipeline = aug_pipeline
+        self.aug_teacher_original = aug_teacher_original
+        self.aug_sample_rate = aug_sample_rate
+
         # Freeze teacher model
         self.teacher_model.eval()
         for param in self.teacher_model.parameters():
             param.requires_grad = False
 
         # Save hyperparameters
-        self.save_hyperparameters(ignore=["teacher_model", "student_model", "loss_fn", "validators"])
+        self.save_hyperparameters(ignore=["teacher_model", "student_model", "loss_fn", "validators", "aug_pipeline"])
 
         # Training context
         self._current_context: tp.Optional[TrainingFlowContext] = None
@@ -81,16 +120,6 @@ class DistillationLightningModule(pl.LightningModule):
         batch: BatchSegments,
         batch_idx: int,
     ) -> torch.Tensor:
-        """
-        Training step.
-
-        Args:
-            batch: Tuple of (inputs, targets) or just (inputs,)
-            batch_idx: Batch index
-
-        Returns:
-            Loss tensor
-        """
         # Create context
         self._current_context = TrainingFlowContext(
             epoch=self.current_epoch,
@@ -98,12 +127,20 @@ class DistillationLightningModule(pl.LightningModule):
             batch_idx=batch_idx,
         )
 
+        segments_teacher = batch.segments
+        segments_student = batch.segments
+
+        if self.aug_pipeline is not None:
+            augmented, original = _augment_batch(batch.segments, self.aug_pipeline, self.aug_sample_rate)
+            segments_student  = augmented
+            segments_teacher  = original if self.aug_teacher_original else augmented
+
         # Get teacher outputs (no gradients)
         with torch.no_grad():
-            teacher_output = self.teacher_model(batch.segments)
+            teacher_output = self.teacher_model(segments_teacher)
 
         # Get student outputs
-        student_output = self.student_model(batch.segments)
+        student_output = self.student_model(segments_student)
 
         # Compute loss
         loss_result = self.loss_fn(
@@ -113,10 +150,7 @@ class DistillationLightningModule(pl.LightningModule):
             step=self.global_step,
         )
 
-        # Add to context
         self._current_context.add_loss("distillation", loss_result)
-
-        # Log losses
         self._log_training_losses(loss_result)
 
         return loss_result.value
@@ -136,7 +170,6 @@ class DistillationLightningModule(pl.LightningModule):
                 )
 
     def on_validation_epoch_start(self) -> None:
-        """Called at the start of validation epoch."""
         self.student_model.eval()
         print("on_validation_epoch_start")
 
@@ -145,15 +178,10 @@ class DistillationLightningModule(pl.LightningModule):
         batch: tp.Tuple[torch.Tensor, ...],
         batch_idx: int,
     ) -> tp.Optional[torch.Tensor]:
-        """
-        Validation step (optional, for dataloader-based validation).
-        Override if you need batch-wise validation.
-        """
         return None
 
-    # def on_epoch_end(self):
     def on_train_epoch_end(self) -> None:
-        """Run validators at the end of each validation epoch."""
+        """Run validators at the end of each training epoch."""
         self.student_model.eval()
 
         if not self.validators:
@@ -169,7 +197,6 @@ class DistillationLightningModule(pl.LightningModule):
                 global_step=self.global_step,
             )
 
-            # Log to TensorBoard
             for key, value in metrics.to_tensorboard_dict().items():
                 self.log(
                     f"val/{validator.name}/{key}",
@@ -178,7 +205,6 @@ class DistillationLightningModule(pl.LightningModule):
                     logger=True,
                 )
 
-            # Print metrics
             print(f"\n[Validator: {validator.name}] {metrics.to_line()}")
 
         self.student_model.train()
@@ -190,14 +216,6 @@ class DistillationLightningModule(pl.LightningModule):
 
     def configure_optimizers(self) -> tp.Dict[str, tp.Any]:
         """Configure optimizer and scheduler."""
-        # optimizer = torch.optim.SGD(
-        #     self.student_model.parameters(),
-        #     lr=self.learning_rate,
-        #     weight_decay=self.weight_decay,
-        #     momentum=0.9,
-        #     nesterov=True
-        # )
-
         optimizer = torch.optim.AdamW(
             self.student_model.parameters(),
             lr=self.learning_rate,

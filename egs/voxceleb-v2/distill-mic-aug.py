@@ -1,19 +1,22 @@
 import typing as tp
+from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
 import yaml
+from audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, SequentialCompose
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
 from validation import AggregatedDataset, TrialBasedValidator, ValidationTrial, VoxDataset, WeightedDataset
 
-from voicesdk.distillation.data import AudioReaderFull, AudioReaderTelSimulated, collate_batch_segments_fn
+from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, collate_batch_segments_fn
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
 from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
+from voicesdk.utils.find_files import find_files_recursive
 
 # ---------------------------------------------------------------------------
 # Config
@@ -22,13 +25,12 @@ from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
 STEPS_PER_EPOCH = 5000
 MAX_EPOCH = 25
 
-TEACHER_CFG = "data/cfg-models/rn100_tel.yaml"
-TEACHER_CKPT = "data/ckpt/rn100_tel4/model_44.pt"
+TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
+TEACHER_CKPT = "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"
 
-STUDENT_CFG = "data/cfg-models/redimnet_M.yaml"
-STUDENT_CKPT = "data/exps/tel-emb-cosine-005/student-24.ckpt"
+STUDENT_CFG = "data/cfg-models/redimnet_L.yaml"
+STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
 # STUDENT_CKPT = None
-# STUDENT_CFG = "data/cfg-models/resnettf_50.yaml"
 
 HEAD_CKPT = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid.pt"
 HEAD_SPEAKERS = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid_speakers.json"
@@ -41,8 +43,12 @@ TRAIN_TIDY_2 = "/media/ssd/voice/datasets/TidyVoiceX2/"
 VAL_ROOT = "/media/ssd/voice/datasets/vox1/test/wav"
 TRIALS_PATH = "data/test_vox/trials"
 
+DIR_RIR = Path("/media/ssd/voice/datasets/RIRs/RIRS_NOISES/")
+DIR_NOISE = Path("/media/ssd/voice/datasets/musan/")
+
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "tel-emb-cosine-008"
+EXPERIMENT_NAME = "mic-emb-cosine-009"
+SAMPLE_RATE = 16_000
 
 
 # ---------------------------------------------------------------------------
@@ -51,13 +57,12 @@ EXPERIMENT_NAME = "tel-emb-cosine-008"
 
 def read_yaml(yaml_path: str) -> dict:
     with open(yaml_path, "r") as f:
-        hparams = yaml.load(f, Loader=yaml.FullLoader)
-    return dict(hparams)
+        return dict(yaml.load(f, Loader=yaml.FullLoader))
 
 
 def get_teacher() -> nn.Module:
     cfg = read_yaml(TEACHER_CFG)
-    state_dict = torch.load(TEACHER_CKPT, map_location=torch.device("cpu"))
+    state_dict = torch.load(TEACHER_CKPT, map_location="cpu")
     model = ResNetTF(**cfg["model_args"])
     model.eval()
     model.load_state_dict(state_dict, strict=True)
@@ -67,10 +72,8 @@ def get_teacher() -> nn.Module:
 def get_student() -> nn.Module:
     cfg = read_yaml(STUDENT_CFG)
     model = ReDimNetWrap(**cfg["model_args"])
-
     if STUDENT_CKPT is not None:
         model.load_state_dict(torch.load(STUDENT_CKPT))
-    # model = ResNetTF(**cfg["model_args"])
     return model
 
 
@@ -78,7 +81,6 @@ def get_head() -> HeadClassificationCentroids:
     state_dict = torch.load(HEAD_CKPT, map_location="cpu")
     centroids = state_dict["centroids.weight"]
     num_classes, embedding_dim = centroids.shape
-
     head = HeadClassificationCentroids(
         embedding_dim=embedding_dim,
         num_classes=num_classes,
@@ -92,16 +94,57 @@ def get_head() -> HeadClassificationCentroids:
 def get_trials_vox1(trial_path: str) -> tp.List[ValidationTrial]:
     trials = []
     with open(trial_path, "r") as f:
-        lines = f.readlines()
-
-    for line in lines:
-        target, left, right = line.strip().split(" ")
-        trials.append(ValidationTrial(
-            trial_left=left,
-            trial_right=right,
-            is_target=target == "1",
-        ))
+        for line in f:
+            target, left, right = line.strip().split(" ")
+            trials.append(ValidationTrial(
+                trial_left=left,
+                trial_right=right,
+                is_target=target == "1",
+            ))
     return trials
+
+
+# ---------------------------------------------------------------------------
+# Augmentation pipeline
+# ---------------------------------------------------------------------------
+# Self-contained: move this function + DIR_* constants to a separate module
+# when needed.
+# ---------------------------------------------------------------------------
+
+def build_augmentation_pipeline() -> SequentialCompose:
+    rir_provider_point = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "pointsource_noises",         extension=".wav"))
+    rir_provider_real  = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "real_rirs_isotropic_noises", extension=".wav"))
+    rir_provider_sim   = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "simulated_rirs",             extension=".wav"))
+
+    noise_provider_music  = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "music",  extension=".wav"))
+    noise_provider_noise  = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "noise",  extension=".wav"))
+    noise_provider_speech = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "speech", extension=".wav"))
+
+    return SequentialCompose(
+        stages=[
+            OneOf(
+                stages=[
+                    Reverb(rir_provider=rir_provider_point, name="reverb_point", wet_dry_range=(0.2, 0.5)),
+                    Reverb(rir_provider=rir_provider_real,  name="reverb_real",  wet_dry_range=(0.2, 0.5)),
+                    Reverb(rir_provider=rir_provider_sim,   name="reverb_sim",   wet_dry_range=(0.2, 0.5)),
+                ],
+                weights=[10, 5, 5],
+                name="reverb",
+                p=0.3,
+            ),
+            OneOf(
+                stages=[
+                    AddNoise(noise_provider=noise_provider_music,  name="noise_music",  snr_range=(-1.0, 10.0)),
+                    AddNoise(noise_provider=noise_provider_noise,  name="noise_noise",  snr_range=(-1.0, 10.0)),
+                    AddNoise(noise_provider=noise_provider_speech, name="noise_speech", snr_range=(5.0,  12.0)),
+                ],
+                weights=[10, 1, 1],
+                name="noise",
+                p=1.0,
+            ),
+        ],
+        p=0.75,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -109,13 +152,13 @@ def get_trials_vox1(trial_path: str) -> tp.List[ValidationTrial]:
 # ---------------------------------------------------------------------------
 
 class ValidationCallback(Callback):
-    """Runs validation at fixed step or epoch intervals."""
+    """Runs validation at fixed step intervals."""
 
     def __init__(
         self,
         validate_every_n_epochs: int = 1,
         validate_every_n_steps: tp.Optional[int] = None,
-    ):
+    ) -> None:
         super().__init__()
         self.validate_every_n_epochs = validate_every_n_epochs
         self.validate_every_n_steps = validate_every_n_steps
@@ -201,17 +244,14 @@ def create_trainer(
 def main() -> None:
     # --- Models ---
     head = get_head()
-    backbone_teacher = get_teacher()
-    backbone_student = get_student()
-
     model_teacher = HeadModelWrapper(
-        model_base=backbone_teacher,
+        model_base=get_teacher(),
         head=head,
         enable_grad=False,
         enable_train=False,
     )
     model_student = HeadModelWrapper(
-        model_base=backbone_student,
+        model_base=get_student(),
         head=head,
         enable_grad=True,
         enable_train=True,
@@ -222,34 +262,17 @@ def main() -> None:
         norm_type="std",
         length_segment_ms=6000,
         segments_step_ms=4000,
-        sample_rate=16000,
+        sample_rate=SAMPLE_RATE,
     )
-    reader_train = AudioReaderTelSimulated(
-        norm_type="std",
-        length_segment_ms=3000,
-        p_tel=0.75
-    )
+    reader_train = AudioReaderRandom(norm_type="std", length_segment_ms=3000)
 
     dataset_val = VoxDataset(reader=reader_val, root=VAL_ROOT)
-    dataset_train_list = [
-        WeightedDataset(
-            dataset=VoxDataset(reader=reader_train, root=TRAIN_VOX),
-            weight=0.4
-        ),
-        WeightedDataset(
-            dataset=VoxDataset(reader=reader_train, root=TRAIN_SIGI),
-            weight=0.3
-        ),
-        WeightedDataset(
-            dataset=VoxDataset(reader=reader_train, root=TRAIN_TIDY_1),
-            weight=0.2
-        ),
-        WeightedDataset(
-            dataset=VoxDataset(reader=reader_train, root=TRAIN_TIDY_2),
-            weight=0.1
-        ),
-    ]
-    dataset_train = AggregatedDataset(sources=dataset_train_list)
+    dataset_train = AggregatedDataset(sources=[
+        WeightedDataset(dataset=VoxDataset(reader=reader_train, root=TRAIN_VOX),    weight=0.8),
+        WeightedDataset(dataset=VoxDataset(reader=reader_train, root=TRAIN_SIGI),   weight=0.3),
+        WeightedDataset(dataset=VoxDataset(reader=reader_train, root=TRAIN_TIDY_1), weight=0.2),
+        WeightedDataset(dataset=VoxDataset(reader=reader_train, root=TRAIN_TIDY_2), weight=0.1),
+    ])
 
     loader_train = DataLoader(
         dataset=dataset_train,
@@ -269,16 +292,13 @@ def main() -> None:
     )
 
     # --- Loss & module ---
-    loss_fn = LossDistillationEmbeddings(loss_type='cosine', normalize=True)
+    loss_fn = LossDistillationEmbeddings(loss_type="cosine", normalize=True)
 
     module_distill = DistillationLightningModule(
         teacher_model=model_teacher,
         student_model=model_student,
         loss_fn=loss_fn,
         validators=[validator],
-        # learning_rate=0.015,
-        # final_lr=0.0001,
-        # weight_decay=1e-5,
         learning_rate=0.003,
         final_lr=0.0001,
         weight_decay=1e-3,
@@ -286,6 +306,10 @@ def main() -> None:
         warm_from_zero=True,
         scale_ratio=1.0,
         total_steps=STEPS_PER_EPOCH * MAX_EPOCH,
+        # --- augmentation ---
+        aug_pipeline=build_augmentation_pipeline(),
+        aug_teacher_original=False,   # False -> teacher also receives augmented audio
+        aug_sample_rate=SAMPLE_RATE,
     )
 
     # --- Trainer ---
@@ -297,7 +321,6 @@ def main() -> None:
         gradient_clip_val=1.0,
         log_dir=LOG_DIR,
         experiment_name=EXPERIMENT_NAME,
-        checkpoint_dir=None,
         save_top_k=3,
         monitor_metric="val/vox1-base/eer",
         monitor_mode="min",

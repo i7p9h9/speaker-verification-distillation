@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from validation import AggregatedDataset, TrialBasedValidator, ValidationTrial, VoxDataset, WeightedDataset
 
-from voicesdk.distillation.data import AudioReaderFull, AudioReaderTelSimulated, collate_batch_segments_fn
+from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, collate_batch_segments_fn
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
@@ -22,12 +22,13 @@ from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
 STEPS_PER_EPOCH = 5000
 MAX_EPOCH = 25
 
-TEACHER_CFG = "data/cfg-models/rn100_tel.yaml"
-TEACHER_CKPT = "data/ckpt/rn100_tel4/model_44.pt"
+TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
+TEACHER_CKPT = "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"
 
+# STUDENT_CFG = "data/cfg-models/redimnet_L.yaml"
 STUDENT_CFG = "data/cfg-models/redimnet_M.yaml"
-STUDENT_CKPT = "data/exps/tel-emb-cosine-005/student-24.ckpt"
-# STUDENT_CKPT = None
+# STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
+STUDENT_CKPT = None
 # STUDENT_CFG = "data/cfg-models/resnettf_50.yaml"
 
 HEAD_CKPT = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid.pt"
@@ -42,7 +43,7 @@ VAL_ROOT = "/media/ssd/voice/datasets/vox1/test/wav"
 TRIALS_PATH = "data/test_vox/trials"
 
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "tel-emb-cosine-008"
+EXPERIMENT_NAME = "mic-emb-cosine-007"
 
 
 # ---------------------------------------------------------------------------
@@ -224,17 +225,21 @@ def main() -> None:
         segments_step_ms=4000,
         sample_rate=16000,
     )
-    reader_train = AudioReaderTelSimulated(
+    reader_train = AudioReaderRandom(
         norm_type="std",
         length_segment_ms=3000,
-        p_tel=0.75
     )
+    # reader_train = AudioReaderTelSimulated(
+    #     norm_type="std",
+    #     length_segment_ms=3000,
+    #     p_tel=0.0
+    # )
 
     dataset_val = VoxDataset(reader=reader_val, root=VAL_ROOT)
     dataset_train_list = [
         WeightedDataset(
             dataset=VoxDataset(reader=reader_train, root=TRAIN_VOX),
-            weight=0.4
+            weight=0.8
         ),
         WeightedDataset(
             dataset=VoxDataset(reader=reader_train, root=TRAIN_SIGI),
@@ -253,7 +258,7 @@ def main() -> None:
 
     loader_train = DataLoader(
         dataset=dataset_train,
-        batch_size=64,
+        batch_size=128,
         collate_fn=collate_batch_segments_fn,
         num_workers=8,
         persistent_workers=True,
