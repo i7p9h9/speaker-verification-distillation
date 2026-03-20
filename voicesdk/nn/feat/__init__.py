@@ -1,2 +1,14 @@
-from .features import STFT, FbankAug, MelBanks, NormalizeAudio, PreEmphasis
-from .features_tf import LogSpec, NormalizeAudio, PreEmphasis, SpectralFeaturesTF
+from .features import STFT, FbankAug, MelBanks
+from .features_tf import LogSpec, SpectralFeaturesTF
+from .preproc import NormalizeAudio, PreEmphasis
+
+__all__ = [
+    'STFT',
+    'FbankAug',
+    'MelBanks',
+    'NormalizeAudio',
+    'LogSpec',
+    'SpectralFeaturesTF',
+    'PreEmphasis',
+    'STFT',
+]

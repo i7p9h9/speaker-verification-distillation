@@ -1,0 +1,61 @@
+model_args:
+  C: 32
+  F: 72
+  block_1d_type: conv+att
+  block_2d_type: basic_resnet
+  emb_bn: false
+  embed_dim: 256
+  feat_type: tf
+  global_context_att: true
+  group_divisor: null
+  hop_length: 160
+  out_channels: null
+  pooling_func: ASTP
+  spec_params:
+    do_preemph: true
+    do_spec_aug: false
+    freq_mask_width:
+    - 0
+    - 6
+    freq_start_bin: 0
+    norm_signal: true
+    time_mask_width:
+    - 0
+    - 8
+  stages_setup:
+  - - 1
+    - 4
+    - 2
+    - - - 3
+        - 3
+    - 32
+  - - 2
+    - 5
+    - 2
+    - - - 3
+        - 3
+    - 32
+  - - 1
+    - 6
+    - 2
+    - - - 3
+        - 3
+    - 32
+  - - 2
+    - 8
+    - 1
+    - - - 3
+        - 3
+    - 32
+  - - 1
+    - 8
+    - 1
+    - - - 3
+        - 3
+    - 32
+  - - 2
+    - 2
+    - 1
+    - - - 3
+        - 3
+    - 32

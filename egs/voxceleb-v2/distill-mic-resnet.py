@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 import torch
 import yaml
 from audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, SequentialCompose
-from pytorch_lightning.callbacks import Callback, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
@@ -15,7 +15,7 @@ from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, colla
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
-from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
+from voicesdk.nn.arch import ECAPA_TDNN, ResNetSE100, ResNetTF
 from voicesdk.utils.find_files import find_files_recursive
 
 # ---------------------------------------------------------------------------
@@ -28,9 +28,10 @@ MAX_EPOCH = 25
 TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
 TEACHER_CKPT = "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"
 
-STUDENT_CFG = "data/cfg-models/redimnet_pt_L.yaml"
-# STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
-STUDENT_CKPT = None
+# STUDENT_CFG = "data/cfg-models/redimnet_L.yaml"
+STUDENT_CFG = "data/cfg-models/resnettf_34.yaml"
+STUDENT_CKPT = "data/exps/mic-emb-cosine-014/student-last.ckpt"
+# STUDENT_CKPT = None
 
 HEAD_CKPT = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid.pt"
 HEAD_SPEAKERS = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid_speakers.json"
@@ -47,7 +48,7 @@ DIR_RIR = Path("/media/ssd/voice/datasets/RIRs/RIRS_NOISES/")
 DIR_NOISE = Path("/media/ssd/voice/datasets/musan/")
 
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "mic-emb-cosine-013"
+EXPERIMENT_NAME = "mic-emb-cosine-015"
 SAMPLE_RATE = 16_000
 
 
@@ -71,7 +72,14 @@ def get_teacher() -> nn.Module:
 
 def get_student() -> nn.Module:
     cfg = read_yaml(STUDENT_CFG)
-    model = ReDimNetWrap(**cfg["model_args"])
+    cfg_teacher = read_yaml(TEACHER_CFG)
+    # model = ReDimNetWrap(**cfg["model_args"])
+    model = ResNetTF(**cfg["model_args"])
+    # model = ResNetSE100(nOut = cfg["model_args"]["embed_dim"])
+    # model = ECAPA_TDNN(
+    #     channels=1024,
+    #     embed_dim=cfg["model_args"]["embed_dim"],
+    #     features_cfg=cfg_teacher["model_args"]["features_cfg"])
     if STUDENT_CKPT is not None:
         model.load_state_dict(torch.load(STUDENT_CKPT))
     return model
@@ -219,6 +227,7 @@ def create_trainer(
         mode=monitor_mode,
         save_last=True,
     ))
+    all_callbacks.append(LearningRateMonitor(logging_interval='step'))
 
     return pl.Trainer(
         max_epochs=max_epochs,

@@ -1,13 +1,7 @@
-import math
 import torch
-import functools
-import numpy as np
 import torch.nn as nn
-from typing import List
-from torch import Tensor
 import torch.nn.functional as F
-from collections import OrderedDict
-from typing import Iterable, Optional
+
 
 class LayerNorm(nn.Module): # ⚡
     """ LayerNorm that supports two data formats: channels_last (default) or channels_first. 
@@ -24,7 +18,7 @@ class LayerNorm(nn.Module): # ⚡
         if self.data_format not in ["channels_last", "channels_first"]:
             raise NotImplementedError 
         self.C = (C, )
-    
+
     def forward(self, x):
         if self.data_format == "channels_last":
             return F.layer_norm(x, self.C, self.weight, self.bias, self.eps)
@@ -32,7 +26,7 @@ class LayerNorm(nn.Module): # ⚡
             u = x.mean(1, keepdim=True)
             s = (x - u).pow(2).mean(1, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
-            
+
             w = self.weight
             b = self.bias
             for _ in range(x.ndim-2):
@@ -40,6 +34,6 @@ class LayerNorm(nn.Module): # ⚡
                 b = b.unsqueeze(-1)
             x = w * x + b # ⚡
             return x
-        
+
     def extra_repr(self) -> str:
         return ", ".join([f"{k}={v}" for k,v in {"C" : self.C, "data_format" : self.data_format, "eps" : self.eps}.items()])

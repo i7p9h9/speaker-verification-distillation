@@ -8,6 +8,7 @@ from torch import nn
 
 from voicesdk.distillation.data import BatchSegments
 from voicesdk.distillation.loss import DFLossBase, LossDistillationBase, ModelOutput
+from voicesdk.optimizers.adamp import AdamP
 from voicesdk.distillation.validation import ValidatorBase
 
 from .flow_context import TrainingFlowContext
@@ -221,8 +222,13 @@ class DistillationLightningModule(pl.LightningModule):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
+        # optimizer = AdamP(
+        #     self.student_model.parameters(),
+        #     lr=self.learning_rate,
+        #     weight_decay=self.weight_decay,
+        # )
 
-        def lr_lambda(step: int) -> float:
+        def lr_lambda_exp_decay(step: int) -> float:
             """Exponential decay with linear warmup."""
             if step < self.warmup_steps:
                 if self.warm_from_zero:
@@ -248,7 +254,7 @@ class DistillationLightningModule(pl.LightningModule):
             progress = (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
             return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_cosine)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_exp_decay)
 
         return {
             "optimizer": optimizer,
