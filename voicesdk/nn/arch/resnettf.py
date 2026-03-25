@@ -9,6 +9,8 @@ from scipy.signal import windows
 from torch import Tensor
 from torch.nn.modules.utils import _pair
 
+from voicesdk.nn.layers import pooling as pooling_layers
+
 
 def pad_dim_zeros_convertable(x, padding, dim=-1, pad_end=True):
     last_dim = x.ndim - 1
@@ -1071,7 +1073,8 @@ class SequentialModel(nn.Module):
 class ResNetTFSubNetS(nn.Module):
     def __init__(
         self,
-        backbone_exp_dir_ep: tuple,
+        backbone_exp_dir_ep: tuple | None = None,
+        backbone: nn.Module | None = None,
         no_grad_backbone: bool = True,
         return_embedding: bool = False,
         subnets_configs: dict = {
@@ -1085,9 +1088,14 @@ class ResNetTFSubNetS(nn.Module):
     ):
         super(ResNetTFSubNetS, self).__init__()
         self.no_grad_backbone = no_grad_backbone
-        from wespeaker.utils.utils import load_experiment_or_asset_model
 
-        self.backbone_model = freeze_model(load_experiment_or_asset_model(*backbone_exp_dir_ep).eval())
+        if backbone_exp_dir_ep:
+            from wespeaker.utils.utils import load_experiment_or_asset_model
+            self.backbone_model = freeze_model(load_experiment_or_asset_model(*backbone_exp_dir_ep).eval())
+        else:
+            assert backbone is not None
+            self.backbone_model = backbone
+
         self.backbone_model.backbone.return_all_outputs = True
 
         bb = self.backbone_model.backbone
@@ -1118,7 +1126,7 @@ class ResNetTFSubNetS(nn.Module):
 
         downsampled_channels = [oc // downsample_ratio for oc in out_channels]
         out_channels_sampled = out_channels
-        subnet_1x1_layers = nn.Moduletp.List(
+        subnet_1x1_layers = nn.ModuleList(
             [make_conv_1x1(oc, dc) for oc, dc in zip(out_channels_sampled, downsampled_channels)]
         )
         cat_channels = [
@@ -1131,14 +1139,14 @@ class ResNetTFSubNetS(nn.Module):
             "bayes_conv": make_bayes_conv_3x3,
         }[type_3x3]
         print(f"{type_3x3}, {make_3x3}")
-        subnet_3x3_layers = nn.Moduletp.List(
+        subnet_3x3_layers = nn.ModuleList(
             [make_3x3(cc, nc, s) for cc, nc, s in zip(cat_channels, downsampled_channels[1:], strides)]
         )
 
         backbone = self.backbone_model.backbone
         blocks_per_stage = [len(getattr(backbone, f"stage{sind}")) for sind in range(backbone.num_stages)]
         BlockReduction = {"last": LastBlockReduction, "linear_weighted": LinearWeigthedReduction}[reduce_blocks]
-        stage_blocks_reducers = nn.Moduletp.List(
+        stage_blocks_reducers = nn.ModuleList(
             [LastBlockReduction()] + [BlockReduction(num_blocks) for num_blocks in blocks_per_stage]
         )
 

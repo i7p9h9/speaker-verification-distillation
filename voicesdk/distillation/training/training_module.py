@@ -254,7 +254,7 @@ class DistillationLightningModule(pl.LightningModule):
             progress = (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
             return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_exp_decay)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_cosine)
 
         return {
             "optimizer": optimizer,
