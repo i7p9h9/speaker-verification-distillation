@@ -37,6 +37,7 @@ class Job:
     src: Path
     dst: Path
     is_m4a: bool
+    is_wav: bool
 
 
 def _ensure_parent_dir(p: Path) -> None:
@@ -57,7 +58,9 @@ def _make_jobs(input_root: Path, output_root: Path) -> list[Job]:
         is_m4a = p.suffix.lower() == ".m4a"
         if is_m4a:
             dst = dst.with_suffix(".wav")
-        jobs.append(Job(src=p, dst=dst, is_m4a=is_m4a))
+        is_wav = p.suffix.lower() == ".wav"
+
+        jobs.append(Job(src=p, dst=dst, is_m4a=is_m4a, is_wav=is_wav))
     return jobs
 
 
@@ -116,6 +119,18 @@ def _process_one(job: Job) -> Tuple[str, str]:
                 bits_per_sample=16,
             )
             return "ok", f"m4a->wav16k {job.src} -> {job.dst}"
+        elif job.is_wav:
+            waveform, sr = torchaudio.load(str(job.src))  # [C, T], sr
+            waveform, out_sr = _resample_to_16k_mono(waveform, sr)
+
+            # Save as PCM 16-bit WAV
+            torchaudio.save(
+                str(job.dst),
+                waveform,
+                out_sr,
+                bits_per_sample=16,
+            )
+            return "ok", f"wav-{sr}->wav-16k {job.src} -> {job.dst}"
         else:
             shutil.copy2(job.src, job.dst)
             return "ok", f"copy {job.src} -> {job.dst}"

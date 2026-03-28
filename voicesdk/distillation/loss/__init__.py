@@ -1,8 +1,10 @@
 from ._types import (
+    CCELossOutput,
     DFLossBase,
     LossDistillationBase,
     ModelOutput,
 )
+from .classifier import LossCCE
 from .dataflow import (
     DFLossDistillationEmbeddings,
     DFLossDistillationLogits,
@@ -16,6 +18,7 @@ from .loss_distill_mixed import LossMixedDistillation
 from .loss_distill_mixed_scheduled import LossScheduledMixedDistillation
 
 __all__ = [
+    "CCELossOutput",
     "DFLossBase",
     "ModelOutput",
     "LossDistillationBase",
@@ -30,4 +33,6 @@ __all__ = [
     "LossDistillationLogits",
     "LossMixedDistillation",
     "LossScheduledMixedDistillation",
+
+    "LossCCE"
 ]

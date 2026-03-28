@@ -40,7 +40,7 @@ TRAIN_VOX = "/media/ssd/voice/datasets/vox2/dev-16k/aac/"
 TRAIN_SIGI = "/media/ssd/voice/datasets/spgispeech/"
 TRAIN_TIDY_1 = "/media/ssd/voice/datasets/TidyVoiceX/"
 TRAIN_TIDY_2 = "/media/ssd/voice/datasets/TidyVoiceX2/"
-TRAIN_CODECS = "/media/ssd/voice/datasets/antispoof/codecs/audio_codecs_results"
+TRAIN_CODECS = "/media/ssd/voice/datasets/antispoof/codecs-16k/audio_codecs_results"
 
 VAL_ROOT = "/media/ssd/voice/datasets/vox1/test/wav"
 TRIALS_PATH = "data/test_vox/trials"

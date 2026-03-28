@@ -59,3 +59,16 @@ class LossDistillationBase(nn.Module, ABC):
             Loss dataclass with computed loss value(s)
         """
         pass
+
+
+@dataclass
+class CCELossOutput(DFLossBase):
+    """Output of the CCE loss function.
+
+    Attributes:
+        value:     Scalar cross-entropy loss tensor.
+        embedding: Optional mean pooled embedding tensor ``[N, D]``,
+                   kept for downstream use (e.g. metric logging, probing).
+    """
+    value: torch.Tensor
+    embedding: tp.Optional[torch.Tensor] = None

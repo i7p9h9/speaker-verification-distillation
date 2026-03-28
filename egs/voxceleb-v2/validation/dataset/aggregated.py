@@ -1,14 +1,12 @@
+from __future__ import annotations
+
 import typing as tp
-from dataclasses import dataclass
 
 import torch
 from torch.utils.data import Dataset
 
-
-@dataclass
-class WeightedDataset:
-    dataset: Dataset
-    weight: tp.Optional[float] = None
+from ._registry import _NameRegistry
+from ._type import WeightedDataset
 
 
 class AggregatedDataset(Dataset):
@@ -24,16 +22,36 @@ class AggregatedDataset(Dataset):
 
     In all cases weights are resolved into a unified list of WeightedDataset
     with explicit normalized floats before sampling.
+
+    Parameters
+    ----------
+    sources:
+        Non-empty list of Dataset or WeightedDataset objects.
+    name:
+        Optional unique name for this dataset. Auto-generated if not provided.
     """
 
-    def __init__(self, sources: tp.Union[tp.List[Dataset], tp.List[WeightedDataset]]) -> None:
+    def __init__(
+        self,
+        sources: tp.Union[tp.List[Dataset], tp.List[WeightedDataset]],
+        name: tp.Optional[str] = None,
+    ) -> None:
         assert len(sources) > 0, "At least one dataset must be provided"
 
-        self._weighted = self._normalize(sources)
-        self._datasets = [s.dataset for s in self._weighted]
-        self._lengths = [len(ds) for ds in self._datasets]  # type: ignore[arg-type]
-        self._total = sum(self._lengths)
-        self._cum_probs = torch.tensor([s.weight for s in self._weighted]).cumsum(dim=0)
+        self._name: str = _NameRegistry.register(name, type(self).__name__)
+        self._weighted: tp.List[WeightedDataset] = self._normalize(sources)
+        self._datasets: tp.List[Dataset] = [s.dataset for s in self._weighted]
+        self._lengths: tp.List[int] = [len(ds) for ds in self._datasets]  # type: ignore[arg-type]
+        self._total: int = sum(self._lengths)
+        self._rebuild_cum_probs()
+
+    # ------------------------------------------------------------------
+    # Name
+    # ------------------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     # ------------------------------------------------------------------
     # Normalization pipeline
@@ -43,10 +61,6 @@ class AggregatedDataset(Dataset):
     def _normalize(
         sources: tp.Union[tp.List[Dataset], tp.List[WeightedDataset]]
     ) -> tp.List[WeightedDataset]:
-        """
-        Convert any accepted input format into a list of WeightedDataset
-        with explicit normalized weights that sum to 1.
-        """
         wrapped = AggregatedDataset._wrap(sources)
         return AggregatedDataset._resolve_weights(wrapped)
 
@@ -54,10 +68,6 @@ class AggregatedDataset(Dataset):
     def _wrap(
         sources: tp.Union[tp.List[Dataset], tp.List[WeightedDataset]]
     ) -> tp.List[WeightedDataset]:
-        """
-        Wrap plain Dataset list into WeightedDataset list (weights=None).
-        Validate WeightedDataset list if already provided.
-        """
         if not isinstance(sources[0], WeightedDataset):
             return [WeightedDataset(dataset=ds, weight=None) for ds in sources]  # type: ignore[arg-type]
 
@@ -74,13 +84,6 @@ class AggregatedDataset(Dataset):
 
     @staticmethod
     def _resolve_weights(sources: tp.List[WeightedDataset]) -> tp.List[WeightedDataset]:
-        """
-        Resolve weights to explicit normalized floats.
-
-        Rules:
-          - all weights None -> proportional to len(dataset)
-          - all weights set  -> normalize to sum=1
-        """
         if all(s.weight is None for s in sources):
             lengths = [len(s.dataset) for s in sources]  # type: ignore[arg-type]
             total = sum(lengths)
@@ -89,7 +92,126 @@ class AggregatedDataset(Dataset):
             total_w = sum(s.weight for s in sources)  # type: ignore[misc]
             resolved = [s.weight / total_w for s in sources]  # type: ignore[operator]
 
-        return [WeightedDataset(dataset=s.dataset, weight=w) for s, w in zip(sources, resolved)]
+        # Resolve child names so each WeightedDataset carries a final name
+        result: tp.List[WeightedDataset] = []
+        for s, w in zip(sources, resolved):
+            child_name = (
+                s.name
+                if s.name is not None
+                else getattr(s.dataset, "name", None)
+            )
+            if child_name is None:
+                child_name = _NameRegistry.register(
+                    None, type(s.dataset).__name__
+                )
+            result.append(WeightedDataset(dataset=s.dataset, weight=w, name=child_name))
+        return result
+
+    def _rebuild_cum_probs(self) -> None:
+        self._cum_probs = torch.tensor(
+            [s.weight for s in self._weighted], dtype=torch.float64
+        ).cumsum(dim=0)
+
+    # ------------------------------------------------------------------
+    # Weight API
+    # ------------------------------------------------------------------
+
+    def get_weights(self) -> tp.Dict[str, float]:
+        """
+        Return a flat dict of all (normalized) weights keyed by path.
+
+        Paths use '/' as separator, e.g. ``"AggregatedDataset_0/TensorDataset_1"``.
+        Inner AggregatedDataset children are expanded recursively.
+        """
+        out: tp.Dict[str, float] = {}
+        self._collect_weights(prefix=self._name, out=out)
+        return out
+
+    def _collect_weights(self, prefix: str, out: tp.Dict[str, float]) -> None:
+        for wd in self._weighted:
+            child_name = wd.name or ""
+            path = f"{prefix}/{child_name}"
+            if isinstance(wd.dataset, AggregatedDataset):
+                # Distribute this node's weight down into its children
+                child_weights = wd.dataset.get_weights()
+                for sub_path, sub_w in child_weights.items():
+                    # sub_path starts with wd.dataset.name — strip that prefix
+                    rel = sub_path[len(wd.dataset.name):]
+                    out[f"{path}{rel}"] = float(wd.weight) * sub_w  # type: ignore[operator]
+            else:
+                out[path] = float(wd.weight)  # type: ignore[arg-type]
+
+    def set_weights(self, weights: tp.Dict[str, float]) -> None:
+        """
+        Update weights from a flat path-keyed dict.
+
+        All values must be positive floats (not None).
+        All keys in *weights* must correspond to existing paths.
+        Weights at each level are re-normalized independently after update.
+
+        Example
+        -------
+        ::
+
+            ds.set_weights({
+                "root/source_a/sub_1": 2.0,
+                "root/source_a/sub_2": 1.0,
+                "root/source_b":       3.0,
+            })
+        """
+        assert all(v is not None and v > 0 for v in weights.values()), (
+            "All weight values must be positive floats (not None, not <= 0)"
+        )
+        self._apply_weights(prefix=self._name, weights=weights)
+
+    def _apply_weights(self, prefix: str, weights: tp.Dict[str, float]) -> None:
+        """
+        Recursively apply *weights* starting from *prefix*.
+
+        For each child we check whether the incoming dict addresses:
+          (a) a direct child key  -> update weight of that child
+          (b) grandchild keys     -> recurse into child AggregatedDataset
+        After applying raw values, renormalize the affected level to sum=1.
+        """
+        raw: tp.Dict[int, float] = {}  # index -> new unnormalized weight
+
+        for i, wd in enumerate(self._weighted):
+            child_name = wd.name or ""
+            direct_key = f"{prefix}/{child_name}"
+
+            # Check direct child hit
+            if direct_key in weights:
+                raw[i] = weights[direct_key]
+
+            # Check grandchild hits (recurse)
+            if isinstance(wd.dataset, AggregatedDataset):
+                child_prefix = direct_key
+                child_keys = {
+                    k: v for k, v in weights.items()
+                    if k.startswith(child_prefix + "/")
+                }
+                if child_keys:
+                    wd.dataset._apply_weights(child_prefix, child_keys)
+
+        if not raw:
+            return  # nothing changed at this level
+
+        # Build new weight list: update addressed indices, keep others
+        current = [float(wd.weight) for wd in self._weighted]  # type: ignore[arg-type]
+        for i, v in raw.items():
+            current[i] = v
+
+        assert all(w > 0 for w in current), (
+            "After update all weights must remain positive"
+        )
+        total = sum(current)
+        for i, wd in enumerate(self._weighted):
+            self._weighted[i] = WeightedDataset(
+                dataset=wd.dataset,
+                weight=current[i] / total,
+                name=wd.name,
+            )
+        self._rebuild_cum_probs()
 
     # ------------------------------------------------------------------
     # Dataset interface
@@ -105,7 +227,9 @@ class AggregatedDataset(Dataset):
         """
         r = torch.rand(1).item()
         dataset_idx = int(
-            torch.searchsorted(self._cum_probs, r).clamp(0, len(self._datasets) - 1)
+            torch.searchsorted(self._cum_probs, torch.tensor(r)).clamp(
+                0, len(self._datasets) - 1
+            )
         )
         inner_idx = int(torch.randint(0, self._lengths[dataset_idx], (1,)).item())
         return self._datasets[dataset_idx][inner_idx]
@@ -120,7 +244,6 @@ class AggregatedDataset(Dataset):
 
     @property
     def weighted(self) -> tp.List[WeightedDataset]:
-        """Resolved WeightedDataset list with normalized weights."""
         return self._weighted
 
     @property
@@ -129,7 +252,7 @@ class AggregatedDataset(Dataset):
 
     def __repr__(self) -> str:
         parts = [
-            f"  [{i}] {type(ds).__name__}(len={self._lengths[i]}, p={self._weighted[i].weight:.4f})"
-            for i, ds in enumerate(self._datasets)
+            f"  [{i}] {wd.name}(len={self._lengths[i]}, p={wd.weight:.4f})"
+            for i, wd in enumerate(self._weighted)
         ]
-        return "AggregatedDataset(\n" + "\n".join(parts) + "\n)"
+        return f"{type(self).__name__}(name={self._name!r},\n" + "\n".join(parts) + "\n)"

@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 import torch
 import yaml
 from audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, SequentialCompose
-from pytorch_lightning.callbacks import Callback, ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.callbacks import Callback, LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
