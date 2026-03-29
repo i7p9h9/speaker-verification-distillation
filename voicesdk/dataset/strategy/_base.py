@@ -1,6 +1,7 @@
 import typing as tp
 
-from labeled_aggregated_dataset import LabeledAggregatedDataset
+if tp.TYPE_CHECKING:
+    from ..labeled import LabeledAggregatedDataset
 
 
 def _get_direct_child_paths(dataset: LabeledAggregatedDataset) -> tp.List[str]:
@@ -31,7 +32,7 @@ class WeightingStrategy:
 
     def __init__(self, dataset: LabeledAggregatedDataset) -> None:
         self._dataset = dataset
-        self._keys: tp.List[str] = _get_direct_child_paths(dataset)
+        self._keys: tp.List[str] = list(dataset.get_weights().keys())
 
     @property
     def keys(self) -> tp.List[str]:

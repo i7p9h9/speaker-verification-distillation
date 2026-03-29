@@ -7,9 +7,10 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
-from validation import AggregatedDataset, TrialBasedValidator, ValidationTrial, VoxDataset, WeightedDataset
+from validation import TrialBasedValidator, ValidationTrial, VoxDataset
 from validation.utils.subnetwork_loader import SubnetworkLoader
 
+from voicesdk.dataset import AggregatedDataset, WeightedDataset
 from voicesdk.distillation.data import AudioReaderFull, AudioReaderTelSimulated, collate_batch_segments_fn
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper

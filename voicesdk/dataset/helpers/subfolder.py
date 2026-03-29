@@ -1,9 +1,12 @@
 import os
 import typing as tp
+from fnmatch import fnmatch
 from pathlib import Path
 
-from aggregated_dataset import WeightedDataset
 from torch.utils.data import Dataset
+
+from .._type import LabeledSource
+from ..aggregated import WeightedDataset
 
 # Factory type: receives the absolute path to a subfolder, returns a Dataset
 DatasetFactory = tp.Callable[[str], Dataset]
@@ -17,6 +20,7 @@ def datasets_from_subfolders(
     recursive: bool = False,
     extensions: tp.Optional[tp.FrozenSet[str]] = None,
     ignore_empty: bool = True,
+    ignore_pattern: str | None = None,
     name_fn: tp.Optional[tp.Callable[[Path], str]] = None,
     prefix: str = ""
 ) -> tp.List[WeightedDataset]:
@@ -104,6 +108,9 @@ def datasets_from_subfolders(
             skipped.append(subfolder)
             continue
 
+        if ignore_pattern and fnmatch(subfolder, ignore_pattern):
+            continue
+
         ds_name = name_fn(subfolder) if name_fn is not None else subfolder.name
         ds = factory(str(subfolder))
 
@@ -139,3 +146,85 @@ def _has_files(
         if Path(entry.name).suffix.lower() in extensions:
             return True
     return False
+
+
+def sources_from_subfolders(
+    root: tp.Union[str, Path],
+    factory: DatasetFactory,
+    label: int,
+    *,
+    source_weight: tp.Optional[float] = None,
+    dataset_weight: tp.Optional[float] = None,
+    recursive: bool = False,
+    extensions: tp.Optional[tp.FrozenSet[str]] = None,
+    ignore_empty: bool = True,
+    ignore_pattern: str | None = None,
+    name_fn: tp.Optional[tp.Callable[[Path], str]] = None,
+    prefix: str = ""
+) -> "tp.List[LabeledSource]":
+    """
+    Scan *root* for subdirectories and return one :class:`LabeledSource`
+    per subdirectory — each source wraps a single-dataset pool.
+
+    Thin wrapper around :func:`datasets_from_subfolders` that produces
+    ``LabeledSource`` objects directly, ready to be unpacked into
+    ``LabeledAggregatedDataset``::
+
+        sources = [
+            *sources_from_subfolders(TRAIN_CODECS, factory, label=1),
+            LabeledSource(...),
+        ]
+
+    Parameters
+    ----------
+    root:
+        Parent directory whose immediate subdirectories become sources.
+    factory:
+        Callable ``(path: str) -> Dataset`` — same as in
+        :func:`datasets_from_subfolders`.
+    label:
+        Integer class label assigned to every produced source.
+    source_weight:
+        Sampling weight of each :class:`LabeledSource` relative to other
+        sources in the parent ``LabeledAggregatedDataset``.
+        ``None`` (default) → equal probability among all sources.
+    dataset_weight:
+        Inner :class:`WeightedDataset` weight (rarely needed since each
+        source has exactly one inner dataset).
+        ``None`` (default) → uniform.
+    recursive:
+        Passed through to :func:`datasets_from_subfolders`.
+    extensions:
+        Passed through to :func:`datasets_from_subfolders`.
+    ignore_empty:
+        Passed through to :func:`datasets_from_subfolders`.
+    name_fn:
+        Passed through to :func:`datasets_from_subfolders`.
+
+    Returns
+    -------
+    List[LabeledSource]
+        One entry per discovered subfolder, sorted by name.
+    """
+
+    weighted_datasets = datasets_from_subfolders(
+        root=root,
+        factory=factory,
+        weight=dataset_weight,
+        recursive=recursive,
+        extensions=extensions,
+        ignore_empty=ignore_empty,
+        ignore_pattern=ignore_pattern,
+        name_fn=name_fn,
+        prefix=prefix,
+    )
+
+    return [
+        LabeledSource(
+            dataset=[wd],
+            label=label,
+            weight=source_weight,
+            name=wd.name,
+        )
+        for wd in weighted_datasets
+    ]

@@ -81,7 +81,7 @@ class LossWeightingStrategy(WeightingStrategy):
         self._eps = eps
 
         # EMA state: None = not yet observed; seeded with raw value on first update
-        self._ema: tp.Dict[str, tp.Optional[float]] = {k: None for k in self._keys}
+        self._ema: tp.Dict[str, tp.Optional[float]] = dataset.get_weights()
 
     # ------------------------------------------------------------------
     # Public API

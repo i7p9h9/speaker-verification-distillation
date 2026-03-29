@@ -1,6 +1,6 @@
 import math
 import typing as tp
-from dataclasses import asdict, fields
+from dataclasses import fields
 
 import pytorch_lightning as pl
 import torch
@@ -8,7 +8,6 @@ from torch import nn
 
 from voicesdk.distillation.data import BatchSegments
 from voicesdk.distillation.loss import DFLossBase, LossDistillationBase, ModelOutput
-from voicesdk.optimizers.adamp import AdamP
 from voicesdk.distillation.validation import ValidatorBase
 
 from .flow_context import TrainingFlowContext

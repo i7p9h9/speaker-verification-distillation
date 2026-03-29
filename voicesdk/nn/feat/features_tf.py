@@ -1,9 +1,10 @@
-import torch
 import numpy as np
+import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
 from scipy.signal import windows
+
 from .preproc import NormalizeAudio, PreEmphasis
 
 
@@ -328,9 +329,9 @@ class TFMelBanks(nn.Module):
         xdtype = x.dtype
         x = x.float()
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 x = self.torchfbank(x)+self.eps
-                x = x.log()   
+                x = x.log()
                 x = x - torch.mean(x, dim=-1, keepdim=True)
                 if self.training:
                     x = self.specaug(x)
@@ -699,7 +700,7 @@ class TFMelBanksV2(nn.Module):
         xdtype = x.dtype
         x = x.float()
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 x = self.torchfbank(x)+self.eps
                 x = x.log()
                 x = self.spec_norm(x)
@@ -780,9 +781,9 @@ class TFSpectrogram(nn.Module):
         xdtype = x.dtype
         x = x.float()
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 x = self.spectrogram(x)+self.eps
-                x = x.log()   
+                x = x.log()
                 x = x - torch.mean(x, dim=-1, keepdim=True)
                 if self.training:
                     for _ in range(self.num_apply_spec_aug):

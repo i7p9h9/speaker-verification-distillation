@@ -1,6 +1,6 @@
 from ._base import ValidatorBase
 from ._types import ValidationTrial
-from .dataset import AggregatedDataset, VoxDataset, WeightedDataset
+from .dataset import VoxDataset
 from .validator_trials import TrialBasedValidator
 
 __all__ = [

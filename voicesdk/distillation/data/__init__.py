@@ -1,4 +1,4 @@
-from .collate.collate_segments import BatchSegments, collate_batch_segments_fn
+from .collate.collate_segments import BatchSegments, collate_batch_labeled_segments_fn, collate_batch_segments_fn
 from .pipe import (
     AudioReaderBase,
     AudioReaderFull,
@@ -17,5 +17,6 @@ __all__ = [
     "AudioReaderTelSimulated",
 
     "BatchSegments",
-    "collate_batch_segments_fn"
+    "collate_batch_segments_fn",
+    "collate_batch_labeled_segments_fn"
 ]

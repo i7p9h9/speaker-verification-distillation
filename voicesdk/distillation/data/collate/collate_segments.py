@@ -1,29 +1,12 @@
 import typing as tp
-from dataclasses import dataclass
 
 import numpy as np
 import torch
 
+from voicesdk.dataset import LabeledSample
+
 from ..pipe import AudioSegments
-
-
-@dataclass
-class BatchSegments:
-    """
-    Collated batch of AudioSegments.
-
-    segments          : (N, segment_length) — all segments concatenated
-    segments_weights  : (N,) — weight per segment
-    segment_to_sample : (N,) — maps each segment back to its sample index in the batch
-    batch_size        : number of original samples in the batch
-    target            : (B,) optional labels, one per sample
-    """
-
-    segments: torch.Tensor           # (N, segment_length)
-    segments_weights: torch.Tensor   # (N,)
-    segment_to_sample: torch.Tensor  # (N,) int64
-    batch_size: int
-    target: tp.Optional[torch.Tensor] = None  # (B,)
+from ._types import BatchLabeledSegments, BatchSegments
 
 
 def collate_batch_segments_fn(
@@ -59,5 +42,40 @@ def collate_batch_segments_fn(
         segments_weights=torch.tensor(all_weights, dtype=torch.float32),
         segment_to_sample=torch.tensor(all_segment_to_sample, dtype=torch.int64),
         batch_size=len(batch),
+        target=torch.tensor(all_targets) if has_target else None,
+    )
+
+
+def collate_batch_labeled_segments_fn(
+    batch: tp.List[LabeledSample],
+) -> BatchLabeledSegments:
+    """
+    Collate a list of LabeledSample(sample=AudioSegments, label=int, dataset_name=str)
+    into BatchLabeledSegments.
+    """
+    all_segments: tp.List[np.ndarray] = []
+    all_weights: tp.List[float] = []
+    all_segment_to_sample: tp.List[int] = []
+    all_labels: tp.List[int] = []
+    all_dataset_names: tp.List[str] = []
+    all_targets: tp.List[tp.Any] = []
+    has_target = False
+
+    for sample_idx, item in enumerate(batch):
+        audio_seg: AudioSegments = item.sample
+        all_labels.append(item.label)
+        all_dataset_names.append(item.dataset_name)
+
+        all_segments.append(audio_seg.segments)
+        all_weights.extend(audio_seg.segments_weights)
+        all_segment_to_sample.extend([sample_idx] * audio_seg.segments.shape[0])
+
+    return BatchLabeledSegments(
+        segments=torch.from_numpy(np.concatenate(all_segments, axis=0)),
+        segments_weights=torch.tensor(all_weights, dtype=torch.float32),
+        segment_to_sample=torch.tensor(all_segment_to_sample, dtype=torch.int64),
+        batch_size=len(batch),
+        labels=torch.tensor(all_labels, dtype=torch.int64),
+        dataset_names=all_dataset_names,
         target=torch.tensor(all_targets) if has_target else None,
     )

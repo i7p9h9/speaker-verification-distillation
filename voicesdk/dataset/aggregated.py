@@ -168,10 +168,18 @@ class AggregatedDataset(Dataset):
         """
         Recursively apply *weights* starting from *prefix*.
 
-        For each child we check whether the incoming dict addresses:
-          (a) a direct child key  -> update weight of that child
-          (b) grandchild keys     -> recurse into child AggregatedDataset
-        After applying raw values, renormalize the affected level to sum=1.
+        For each child of this node:
+          (a) direct key ``prefix/child`` present in *weights*
+              → use that value as the new raw weight for this child.
+          (b) descendant keys ``prefix/child/...`` present in *weights*
+              → sum their values and use the total as the raw weight for
+                this child, then recurse into the child so it can apply
+                the fine-grained update internally.
+
+        Both (a) and (b) are independent and can be combined in one call.
+        After collecting raw weights for every addressed child at this level,
+        the weights are renormalized to sum=1 and updated in-place.
+        Unaddressed children keep their current weight.
         """
         raw: tp.Dict[int, float] = {}  # index -> new unnormalized weight
 
@@ -179,24 +187,28 @@ class AggregatedDataset(Dataset):
             child_name = wd.name or ""
             direct_key = f"{prefix}/{child_name}"
 
-            # Check direct child hit
+            # (a) direct child key
             if direct_key in weights:
                 raw[i] = weights[direct_key]
 
-            # Check grandchild hits (recurse)
-            if isinstance(wd.dataset, AggregatedDataset):
-                child_prefix = direct_key
-                child_keys = {
-                    k: v for k, v in weights.items()
-                    if k.startswith(child_prefix + "/")
-                }
-                if child_keys:
-                    wd.dataset._apply_weights(child_prefix, child_keys)
+            # (b) descendant keys — sum values to get this child's raw weight
+            #     then recurse so the inner dataset applies fine-grained updates
+            desc_keys = {
+                k: v for k, v in weights.items()
+                if k.startswith(direct_key + "/")
+            }
+            if desc_keys:
+                # Use sum of descendant values as the proportional weight for
+                # this child at the current level (only if not already set by (a))
+                if i not in raw:
+                    raw[i] = sum(desc_keys.values())
+                if isinstance(wd.dataset, AggregatedDataset):
+                    wd.dataset._apply_weights(direct_key, desc_keys)
 
         if not raw:
-            return  # nothing changed at this level
+            return  # nothing addressed at this level
 
-        # Build new weight list: update addressed indices, keep others
+        # Update in-place: addressed entries get new values, others stay
         current = [float(wd.weight) for wd in self._weighted]  # type: ignore[arg-type]
         for i, v in raw.items():
             current[i] = v
@@ -206,11 +218,7 @@ class AggregatedDataset(Dataset):
         )
         total = sum(current)
         for i, wd in enumerate(self._weighted):
-            self._weighted[i] = WeightedDataset(
-                dataset=wd.dataset,
-                weight=current[i] / total,
-                name=wd.name,
-            )
+            wd.weight = current[i] / total
         self._rebuild_cum_probs()
 
     # ------------------------------------------------------------------
