@@ -9,8 +9,9 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
-from validation import AggregatedDataset, TrialBasedValidator, ValidationTrial, VoxDataset, WeightedDataset
+from validation import TrialBasedValidator, ValidationTrial, VoxDataset
 
+from voicesdk.dataset import AggregatedDataset, WeightedDataset
 from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, collate_batch_segments_fn
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
@@ -112,12 +113,12 @@ def get_trials_vox1(trial_path: str) -> tp.List[ValidationTrial]:
 # ---------------------------------------------------------------------------
 
 def build_augmentation_pipeline() -> SequentialCompose:
-    rir_provider_point = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "pointsource_noises",         extension=".wav"))
-    rir_provider_real  = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "real_rirs_isotropic_noises", extension=".wav"))
-    rir_provider_sim   = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "simulated_rirs",             extension=".wav"))
+    rir_provider_point = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "pointsource_noises", extension=".wav"))
+    rir_provider_real = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "real_rirs_isotropic_noises", extension=".wav"))
+    rir_provider_sim = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "simulated_rirs", extension=".wav"))
 
-    noise_provider_music  = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "music",  extension=".wav"))
-    noise_provider_noise  = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "noise",  extension=".wav"))
+    noise_provider_music = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "music", extension=".wav"))
+    noise_provider_noise = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "noise", extension=".wav"))
     noise_provider_speech = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "speech", extension=".wav"))
 
     return SequentialCompose(
@@ -125,8 +126,8 @@ def build_augmentation_pipeline() -> SequentialCompose:
             OneOf(
                 stages=[
                     Reverb(rir_provider=rir_provider_point, name="reverb_point", wet_dry_range=(0.2, 0.5)),
-                    Reverb(rir_provider=rir_provider_real,  name="reverb_real",  wet_dry_range=(0.2, 0.5)),
-                    Reverb(rir_provider=rir_provider_sim,   name="reverb_sim",   wet_dry_range=(0.2, 0.5)),
+                    Reverb(rir_provider=rir_provider_real, name="reverb_real", wet_dry_range=(0.2, 0.5)),
+                    Reverb(rir_provider=rir_provider_sim, name="reverb_sim", wet_dry_range=(0.2, 0.5)),
                 ],
                 weights=[1, 3, 1],
                 name="reverb",

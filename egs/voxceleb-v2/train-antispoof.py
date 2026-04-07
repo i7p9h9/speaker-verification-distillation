@@ -1,3 +1,4 @@
+import shutil
 import typing as tp
 from functools import partial
 from pathlib import Path
@@ -9,7 +10,8 @@ from audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, Sequen
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
-from validation import VoxDataset
+from validation import AggregatedAntiSpoofingValidator, AntiSpoofingValidator, VoxDataset
+from validation.utils.get_spoof_datasets import get_asv_spoof_17, get_asv_spoof_19, get_splitted
 
 from voicesdk.dataset import (
     LabeledAggregatedDataset,
@@ -19,11 +21,13 @@ from voicesdk.dataset import (
     sources_from_subfolders,
 )
 from voicesdk.distillation.data import (
+    AudioReaderBegin,
     AudioReaderTelSimulated,
     collate_batch_labeled_segments_fn,
+    collate_batch_segments_fn,
 )
 from voicesdk.distillation.training.trainer_antispoof import AntispoofLightningModule, WeightLogger
-from voicesdk.nn.arch import ReDimNetWrap
+from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
 from voicesdk.nn.loss import AMSoftmaxLoss
 from voicesdk.utils.find_files import find_files_recursive
 
@@ -31,11 +35,13 @@ from voicesdk.utils.find_files import find_files_recursive
 # Config
 # ---------------------------------------------------------------------------
 
-STEPS_PER_EPOCH: int = 5_000
+STEPS_PER_EPOCH: int = 5000
 MAX_EPOCHS: int = 30
 
-STUDENT_CFG: str = "data/cfg-models/redimnet_M.yaml"
-BACKBONE_CKPT: str = 'data/exps/tel-subnet-emb-cosine-016/checkpoints/last.ckpt'
+# STUDEBACKBONE_CFGNT_CFG: str = "data/cfg-models/redimnet_M.yaml"
+# BACKBONE_CKPT: str = 'data/exps/tel-subnet-emb-cosine-016/checkpoints/last.ckpt'
+BACKBONE_CFG = "data/cfg-models/resnettf_34.yaml"
+BACKBONE_CKPT = "data/exps/mic-emb-cosine-014/student-last.ckpt"
 RESUME_CKPT: tp.Optional[str] = None  # path to Lightning checkpoint to resume
 
 # AM-Softmax head
@@ -56,7 +62,7 @@ NUM_WORKERS: int = 8
 
 # Logging
 LOG_DIR: str = "data/exps/"
-EXPERIMENT_NAME: str = "antispoof-train-001"
+EXPERIMENT_NAME: str = "antispoof-join-no-codecs-train-005"
 LOG_WEIGHTS_EVERY: int = 100  # steps between dataset-weight log entries
 
 # Dataset roots
@@ -64,18 +70,139 @@ PATH_TRAIN_VOX: str = "/media/ssd/voice/datasets/vox2/dev-16k/aac/"
 PATH_TRAIN_SPGI: str = "/media/ssd/voice/datasets/spgispeech/"
 PATH_TRAIN_TIDY_1: str = "/media/ssd/voice/datasets/TidyVoiceX/"
 PATH_TRAIN_TIDY_2: str = "/media/ssd/voice/datasets/TidyVoiceX2/"
+PATH_TRAIN_LIBRI: str = "/media/ssd/voice/datasets/librispeech/"
 PATH_TRAIN_CODECS: str = "/media/ssd/voice/datasets/antispoof/codecs-16k/audio_codecs_results"
 PATH_TRAIN_VC_TTS: str = "/media/ssd/voice/datasets/antispoof/vc_tts_engines-16k/data"
 PATH_SYN_TTS_COMMON: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/tts"
 PATH_SYN_ASV21_EVAL_DF: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/ASV21Eval/ASVspoof2021_DF_eval"
+PATH_SYN_ASV21_EVAL_LA: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/ASV21Eval/ASVspoof2021_LA_eval"
 PATH_SYN_ASV19_EVAL_DF: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/ASVSpoof2019_LA_eval"
 PATH_SYN_VOCODERS_V1: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/vocoders-v1/train/synthes"
 PATH_SYN_VC_VOL1: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/voice_clones/train/synthes"
 PATH_SYN_VC_VOL2: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/voice-clone-vol2/train"
 
+# Dataset PAD
+PATH_PAD = "/media/ssd/voice/datasets/antispoof/replay/"
+
 # augmentation
 DIR_RIR = Path("/media/ssd/voice/datasets/RIRs/RIRS_NOISES/")
 DIR_NOISE = Path("/media/ssd/voice/datasets/musan/")
+
+# Validation
+DIR_ASV_17 = Path("/media/ssd/voice/datasets/antispoof/synthesis-test/ASV17_eval/")
+DIR_ASV_19 = Path("/media/ssd/voice/datasets/antispoof/synthesis-test/ASVspoof2019_LA_cellular/")
+DIR_DEEP_VOICE = Path("/media/ssd/voice/datasets/antispoof/synthesis-test/DEEP-VOICE/AUDIO_16k_cut/")
+DIR_FAKE_OR_REAL = Path("/media/ssd/voice/datasets/antispoof/synthesis-test/FakeOrReal/for-norm/validation/")
+
+
+def backup_script(log_dir: Path) -> None:
+    """Copy the current script to log_dir/scripts/."""
+    src = Path(__file__).resolve()
+    dst_dir = log_dir / "scripts"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    shutil.copy2(src, dst)
+    print(f"Script backed up: {src} -> {dst}")
+
+
+def get_validation_datasets(reader, batch_size=100, num_workers: int = 2):
+    _data_loader = partial(
+        DataLoader,
+        batch_size=batch_size,
+        collate_fn=collate_batch_segments_fn,
+        num_workers=num_workers,
+        persistent_workers=False,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    def print_dataset_stats(name: str, datasets) -> None:
+        n_live = len(datasets.dataset_live)
+        n_spoof = len(datasets.dataset_spoof)
+        total = n_live + n_spoof
+        print(
+            f"[{name}] live: {n_live:>6} | spoof: {n_spoof:>6} | total: {total:>6}"
+        )
+
+    datasets_asv_17 = get_asv_spoof_17(
+        dir_main=DIR_ASV_17,
+        reader=reader,
+        limit_live=1600,
+        limit_spoof=1600,
+    )
+    print_dataset_stats("ASVspoof17", datasets_asv_17)
+
+    datasets_asv_19 = get_asv_spoof_19(
+        dir_wav=DIR_ASV_19 / "dev" / "ASVspoof2019_LA_dev" / "wav",
+        file_meta=DIR_ASV_19 / "ASVspoof2019_LA_protocols" / "ASVspoof2019.LA.cm.dev.trl.txt",
+        reader=reader,
+        limit_live=1600,
+        limit_spoof=1600,
+    )
+    print_dataset_stats("ASVspoof19", datasets_asv_19)
+
+    datasets_fake_or_real = get_splitted(
+        dir_live=DIR_FAKE_OR_REAL / "real",
+        dir_spoof=DIR_FAKE_OR_REAL / "fake",
+        reader=reader,
+        limit_live=1600,
+        limit_spoof=1600,
+    )
+    print_dataset_stats("FakeOrReal", datasets_fake_or_real)
+
+    # NOTE: original code reassigned datasets_fake_or_real — using separate variable here
+    datasets_deep_voice = get_splitted(
+        dir_live=DIR_DEEP_VOICE / "REAL",
+        dir_spoof=DIR_DEEP_VOICE / "FAKE",
+        reader=reader,
+        limit_live=1600,
+        limit_spoof=1600,
+    )
+    print_dataset_stats("DeepVoice", datasets_deep_voice)
+
+    validators: tp.List[AntiSpoofingValidator] = []
+
+    validators.append(
+        AntiSpoofingValidator(
+            name="asv_spoof_17",
+            bonafide_loader=_data_loader(datasets_asv_17.dataset_live),
+            spoof_loader=_data_loader(datasets_asv_17.dataset_spoof),
+        )
+    )
+    # validators.append(
+    #     AntiSpoofingValidator(
+    #         name="asv_spoof_19",
+    #         bonafide_loader=_data_loader(datasets_asv_19.dataset_live),
+    #         spoof_loader=_data_loader(datasets_asv_19.dataset_spoof),
+    #     )
+    # )
+    validators.append(
+        AntiSpoofingValidator(
+            name="fake_or_real",
+            bonafide_loader=_data_loader(datasets_fake_or_real.dataset_live),
+            spoof_loader=_data_loader(datasets_fake_or_real.dataset_spoof),
+        )
+    )
+    validators.append(
+        AntiSpoofingValidator(
+            name="deep_voice",
+            bonafide_loader=_data_loader(datasets_deep_voice.dataset_live),
+            spoof_loader=_data_loader(datasets_deep_voice.dataset_spoof),
+        )
+    )
+
+    total_live = sum(len(v.bonafide_loader.dataset) for v in validators)
+    total_spoof = sum(len(v.spoof_loader.dataset) for v in validators)
+    print(f"{'─' * 55}")
+    print(
+        f"[TOTAL]     live: {total_live:>6} | spoof: {total_spoof:>6} | total: {total_live + total_spoof:>6}"
+    )
+
+    return AggregatedAntiSpoofingValidator(
+        name="spoof-joined",
+        validators=validators,
+        return_scores=False,
+    )
 
 
 def build_augmentation_pipeline() -> SequentialCompose:
@@ -97,7 +224,7 @@ def build_augmentation_pipeline() -> SequentialCompose:
                 ],
                 weights=[1, 3, 1],
                 name="reverb",
-                p=0.1,
+                p=0.01,
             ),
             OneOf(
                 stages=[
@@ -110,23 +237,45 @@ def build_augmentation_pipeline() -> SequentialCompose:
                 p=1.0,
             ),
         ],
-        p=0.1,
+        p=0.05,
     )
 
 
+def read_yaml(yaml_path: str) -> dict:
+    with open(yaml_path, "r") as f:
+        hparams = yaml.load(f, Loader=yaml.FullLoader)
+    return dict(hparams)
+
 
 # ---- model -----------------------------------------------------------
-def get_model():
-    with open(STUDENT_CFG, "r") as f:
-        cfg = yaml.safe_load(f)
-    backbone = ReDimNetWrap(**cfg["model_args"])
+# def get_model():
+#     with open(BACKBONE_CFG, "r") as f:
+#         cfg = yaml.safe_load(f)
+#     backbone = ReDimNetWrap(**cfg["model_args"])
 
-    if BACKBONE_CKPT is not None:
-        weights_path = Path(BACKBONE_CKPT)
-        state_dict_loaded = torch.load(weights_path)
-        state_dict_student = backbone.state_dict()
-        for k in state_dict_student:
-            state_dict_student[k].copy_(state_dict_loaded["state_dict"][f"student_model.model_base.{k}"])
+#     if BACKBONE_CKPT is not None:
+#         weights_path = Path(BACKBONE_CKPT)
+#         state_dict_loaded = torch.load(weights_path)
+#         state_dict_student = backbone.state_dict()
+#         for k in state_dict_student:
+#             state_dict_student[k].copy_(state_dict_loaded["state_dict"][f"student_model.model_base.{k}"])
+
+#     am_loss = AMSoftmaxLoss(
+#         embedding_dim=EMBEDDING_DIM,
+#         num_classes=NUM_CLASSES,
+#         scale=AM_SCALE,
+#         margin=AM_MARGIN,
+#     )
+
+#     return backbone, am_loss
+
+def get_model():
+    cfg = read_yaml(BACKBONE_CFG)
+    backbone = ResNetTF(**cfg["model_args"])
+
+    weights_path = Path(BACKBONE_CKPT)
+    state_dict_loaded = torch.load(weights_path)
+    backbone.load_state_dict(state_dict_loaded)
 
     am_loss = AMSoftmaxLoss(
         embedding_dim=EMBEDDING_DIM,
@@ -136,6 +285,7 @@ def get_model():
     )
 
     return backbone, am_loss
+
 
 
 def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
@@ -171,6 +321,10 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_TIDY_2))],
         label=0, weight=1.0, name="tidy_voice_2",
     ))
+    sources.append(LabeledSource(
+        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_LIBRI))],
+        label=0, weight=3.0, name="libri_speech",
+    ))
 
     # spoof — named subsets
     sources.append(LabeledSource(
@@ -178,20 +332,29 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         label=1, weight=0.2, name="ASV21Eval_DF",
     ))
     sources.append(LabeledSource(
+        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV21_EVAL_LA))],
+        label=1, weight=0.2, name="ASV21Eval_LA",
+    ))
+    sources.append(LabeledSource(
         dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV19_EVAL_DF))],
         label=1, weight=0.2, name="ASV19Eval_DF",
     ))
+    # sources.append(LabeledSource(
+    #     dataset=[WeightedDataset(VoxDataset(reader=reader, root=f"{PATH_PAD}/voxceleb_toloka_replays_2026_02_21-16k"))],
+    #     label=1, weight=5.0, name="Replay",
+    # ))
 
     # spoof — subfolder-split sources
     sources += create_spoof_source(
         root=PATH_SYN_TTS_COMMON, source_weight=2.0,
         ignore_pattern="*tts_test_set*",
     )
-    sources += create_spoof_source(root=PATH_TRAIN_CODECS, source_weight=1.0)
+    # sources += create_spoof_source(root=PATH_TRAIN_CODECS, source_weight=1.0)
     sources += create_spoof_source(root=PATH_TRAIN_VC_TTS, source_weight=0.8)
-    sources += create_spoof_source(root=PATH_SYN_VOCODERS_V1, source_weight=1.2)
+    sources += create_spoof_source(root=PATH_SYN_VOCODERS_V1, ignore_pattern="*BigVGAN*", source_weight=1.2)
     sources += create_spoof_source(root=PATH_SYN_VC_VOL1, source_weight=0.5)
     sources += create_spoof_source(root=PATH_SYN_VC_VOL2, ignore_pattern="*resamble_denoiser*", source_weight=1.0)
+    sources += create_spoof_source(root=PATH_PAD, source_weight=5.0)
 
     return LabeledAggregatedDataset(sources=sources, name="train_dataset")
 
@@ -259,6 +422,10 @@ def main() -> None:
         length_segment_ms=3_000,
         p_tel=0.75,
     )
+    reader_val = AudioReaderBegin(
+        norm_type="std",
+        length_segment_ms=3_000,
+    )
     dataset_train = build_train_dataset(reader_train)
     strategy = LossWeightingStrategy(dataset_train, ema_alpha=0.02)
 
@@ -288,9 +455,13 @@ def main() -> None:
         filename="{epoch}-{step}",
         save_top_k=3,
         monitor="train/loss",
+        # monitor_metric="val/vox1-base/eer",
         mode="min",
         save_last=True,
     )
+
+    # ---- validation defenition -------------------------------------------
+    validator = get_validation_datasets(reader=reader_val)
 
     # ---- lightning module ------------------------------------------------
     module = AntispoofLightningModule(
@@ -298,6 +469,7 @@ def main() -> None:
         am_loss=am_loss,
         dataset=dataset_train,
         strategy=strategy,
+        validators=[validator],
         weight_logger=weight_logger,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
@@ -323,6 +495,8 @@ def main() -> None:
         limit_train_batches=STEPS_PER_EPOCH,
         limit_val_batches=0,  # no val loader — attach validator Callbacks if needed
     )
+
+    backup_script(Path(LOG_DIR) / EXPERIMENT_NAME)
 
     trainer.fit(
         module,
