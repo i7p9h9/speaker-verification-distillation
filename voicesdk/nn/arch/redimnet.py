@@ -624,6 +624,7 @@ class ReDimNetWrap(nn.Module):
         # -------------------------
         return_all_outputs=False,
         tf_optimized_arch=False,
+        use_feats=True,
         # offset_fm_weights = 0,
         # is_subnet = False
     ):
@@ -652,7 +653,10 @@ class ReDimNetWrap(nn.Module):
             offset_fm_weights=0,
             is_subnet=False,
         )
-        if feat_type in ["pt", "pt_mel"]:
+        print(f"init redimnet with use_feats: {use_feats}")
+        if not use_feats:
+            self.spec = None
+        elif feat_type in ["pt", "pt_mel"]:
             self.spec = features.MelBanks(n_mels=F, hop_length=hop_length, **spec_params)
         elif feat_type in ["tf", "tf_mel"]:
             self.spec = features_tf.TFMelBanks(n_mels=F, hop_length=hop_length, **spec_params)
@@ -660,6 +664,8 @@ class ReDimNetWrap(nn.Module):
             self.spec = features_tf.TFSpectrogram(**spec_params)
         elif feat_type == "pt_stft":
             self.spec = features.STFT(**spec_params)
+        elif feat_type is None:
+            self.spec = None
 
         if out_channels is None:
             out_channels = C * F
@@ -694,7 +700,8 @@ class ReDimNetWrap(nn.Module):
             self.cls_head = None
 
     def forward(self, x):
-        x = self.spec(x)
+        if self.spec is not None:
+            x = self.spec(x)
         if self.tf_optimized_arch:
             x = x.permute(0, 2, 1)
 

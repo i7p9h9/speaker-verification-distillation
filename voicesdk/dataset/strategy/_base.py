@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import typing as tp
 
 if tp.TYPE_CHECKING:
     from ..labeled import LabeledAggregatedDataset
 
 
-def _get_direct_child_paths(dataset: LabeledAggregatedDataset) -> tp.List[str]:
+def _get_direct_child_paths(dataset: "LabeledAggregatedDataset") -> tp.List[str]:
     """Return ``"root/child_name"`` paths for each direct child of *dataset*."""
     return [f"{dataset.name}/{wd.name}" for wd in dataset.weighted]
 

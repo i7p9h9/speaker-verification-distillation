@@ -132,8 +132,8 @@ class DistillationLightningModule(pl.LightningModule):
 
         if self.aug_pipeline is not None:
             augmented, original = _augment_batch(batch.segments, self.aug_pipeline, self.aug_sample_rate)
-            segments_student  = augmented
-            segments_teacher  = original if self.aug_teacher_original else augmented
+            segments_student = augmented
+            segments_teacher = original if self.aug_teacher_original else augmented
 
         # Get teacher outputs (no gradients)
         with torch.no_grad():

@@ -13,7 +13,6 @@ import logging
 import math
 import typing as tp
 from collections import defaultdict
-from functools import partial
 from pathlib import Path
 
 import matplotlib as plt
@@ -22,15 +21,12 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
-from validation import VoxDataset
 
 from voicesdk.dataset import (
     LabeledAggregatedDataset,
-    LabeledSource,
     LossWeightingStrategy,
-    WeightedDataset,
-    sources_from_subfolders,
 )
+from voicesdk.distillation.validation import ValidatorBase
 from voicesdk.nn.loss import AMSoftmaxLoss
 
 if tp.TYPE_CHECKING:
@@ -302,6 +298,22 @@ class WeightLogger:
                 writer.add_scalar(f"weights/cumsum/{name}",   cumsum, global_step)
                 csv_w.writerow([global_step, name, val])
 
+class JoinedModel(nn.Module):
+    def __init__(self, backbone, loss):
+        super().__init__()
+        self.backbone = backbone
+        self.loss = loss
+
+    def predict(self, x):
+        emb = self.backbone(x)
+        return self.loss.predict(emb)
+
+    def forward(self, x, labels=None):
+        if labels is None:
+            return self.predict(x)
+        emb = self.backbone(x)
+        return self.loss(emb, labels)
+
 # =========================================================================== #
 # Lightning module                                                             #
 # =========================================================================== #
@@ -335,6 +347,7 @@ class AntispoofLightningModule(pl.LightningModule):
         dataset: LabeledAggregatedDataset,
         strategy: LossWeightingStrategy,
         weight_logger: WeightLogger,
+        validators: tp.Optional[tp.List[ValidatorBase]] = None,
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-3,
         warmup_steps: int = 500,
@@ -348,9 +361,11 @@ class AntispoofLightningModule(pl.LightningModule):
 
         self.backbone = backbone
         self.am_loss = am_loss
+        self.joined_model = JoinedModel(backbone=backbone, loss=am_loss)
         self.dataset = dataset
         self.strategy = strategy
         self.weight_logger = weight_logger
+        self.validators = validators
 
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
@@ -371,6 +386,10 @@ class AntispoofLightningModule(pl.LightningModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)
+
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        emb = self.backbone(x)
+        return self.am_loss.predict(emb)
 
     # ----------------------------------------------------------------------- #
     # Training                                                                  #
@@ -426,6 +445,35 @@ class AntispoofLightningModule(pl.LightningModule):
 
     def validation_step(self, batch: tp.Any, batch_idx: int) -> None:
         return None
+
+    def on_train_epoch_end(self) -> None:
+        """Run validators at the end of each training epoch."""
+        self.joined_model.eval()
+
+        if not self.validators:
+            return
+
+        device = next(self.joined_model.parameters()).device
+
+        for validator in self.validators:
+            metrics = validator.run(
+                model=self.joined_model,
+                device=device,
+                epoch=self.current_epoch,
+                global_step=self.global_step,
+            )
+
+            for key, value in metrics.to_tensorboard_dict().items():
+                self.log(
+                    f"val/{validator.name}/{key}",
+                    value,
+                    on_epoch=True,
+                    logger=True,
+                )
+
+            print(f"\n[Validator: {validator.name}] {metrics.to_line()}")
+
+        self.joined_model.train()
 
     # ----------------------------------------------------------------------- #
     # Optimizer + LR scheduler                                                #

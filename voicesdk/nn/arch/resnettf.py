@@ -944,16 +944,23 @@ class ResNetTF(nn.Module):
         post_pool_dims=3072 * 2,
         embedding_size=256,
         bn_eps=1e-3,
+        use_feats=True
     ):
         super(ResNetTF, self).__init__()
-        self.features = SpectralFeaturesTF(**features_cfg)
+        if use_feats:
+            self.features = SpectralFeaturesTF(**features_cfg)
+        else:
+            self.features = None
         self.backbone = ResNetTFBackbone(**backbone_cfg)
         self.pre_pool = StackFreqDim(permute_chan_freq=True)
         self.pooling = eval(pooling_type)(**pooling_cfg)
         self.head = nn.Sequential(nn.Linear(post_pool_dims, embedding_size), nn.BatchNorm1d(embedding_size, eps=bn_eps))
 
     def forward(self, x):
-        h = self.features(x)
+        if self.features is not None:
+            h = self.features(x)
+        else:
+            h = x
         h = self.backbone(h)
         h = self.pre_pool(h)
         h = self.pooling(h)

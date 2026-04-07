@@ -26,6 +26,9 @@ egs/voxceleb-v2/data/ckpt
 egs/voxceleb-v2/data/exps
 egs/voxceleb-v2/data/centroidsexps
 egs/voxceleb-v2/data/test_vox
+egs/voxceleb-v2/data/lda_analysis
+# egs/voxceleb-v2/data/*/**.*
+# !egs/voxceleb-v2/data/cfg-models
 
 # Distribution / packaging
 .Python

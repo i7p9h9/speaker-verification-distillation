@@ -228,6 +228,10 @@ class AudioReaderRandom(AudioReaderBase):
         signal = self.normalize(self.load(filename))
         return self._random_crop(signal)
 
+    def _get_random_start(self, max_start: int) -> int:
+        start = int(self._rng.integers(0, max_start + 1))
+        return start
+
     def _random_crop(self, signal: np.ndarray) -> AudioSegments:
         total_length = len(signal)
         total_duration_ms = self._samples_to_ms(total_length)
@@ -245,7 +249,7 @@ class AudioReaderRandom(AudioReaderBase):
 
         # Pick a random start position
         max_start = total_length - segment_length
-        start = int(self._rng.integers(0, max_start + 1))
+        start = self._get_random_start(max_start)
         segment = signal[start : start + segment_length]
 
         return AudioSegments(
@@ -254,6 +258,11 @@ class AudioReaderRandom(AudioReaderBase):
             segments_weights=[1.0],
             total_duration=total_duration_ms,
         )
+
+
+class AudioReaderBegin(AudioReaderRandom):
+    def _get_random_start(self, *_):
+        return 0
 
 
 class AudioReaderTelSimulated(AudioReaderBase):
