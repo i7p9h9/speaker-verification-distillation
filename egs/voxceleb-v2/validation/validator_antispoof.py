@@ -276,8 +276,7 @@ class AntiSpoofingValidator(ValidatorBase):
             model_output = model_output[0]
         t = model_output.detach().cpu().float()
         if t.dim() > 1:
-            # Take the last logit / bonafide class score
-            t = t[:, -1]
+            t = t[:, 0]
         return t.tolist()
 
     @torch.no_grad()

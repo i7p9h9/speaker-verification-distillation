@@ -5,6 +5,7 @@ import typing as tp
 import torch
 
 from ._registry import _NameRegistry
+from ._shared_weights import SharedWeights
 from ._type import LabeledSample, LabeledSource, WeightedDataset
 from .aggregated import AggregatedDataset
 
@@ -21,11 +22,7 @@ def _sample_with_path(ds: AggregatedDataset) -> tp.Tuple[tp.Any, str]:
     the full leaf path is captured.
     """
     r = torch.rand(1).item()
-    idx = int(
-        torch.searchsorted(ds._cum_probs, torch.tensor(r)).clamp(
-            0, len(ds._datasets) - 1
-        )
-    )
+    idx = int(torch.searchsorted(ds.cum_probs, torch.tensor(r)).clamp(0, len(ds._datasets) - 1))
     wd = ds._weighted[idx]
     child_name = wd.name or ""
     child_ds = ds._datasets[idx]
@@ -44,6 +41,7 @@ def _sample_with_path(ds: AggregatedDataset) -> tp.Tuple[tp.Any, str]:
 # ---------------------------------------------------------------------------
 # LabeledAggregatedDataset
 # ---------------------------------------------------------------------------
+
 
 class LabeledAggregatedDataset(AggregatedDataset):
     """
@@ -87,31 +85,14 @@ class LabeledAggregatedDataset(AggregatedDataset):
         assert len(sources) > 0, "At least one LabeledSource must be provided"
         self._validate_labeled_sources(sources)
 
-        # Build inner AggregatedDataset for every source (reuse if already one)
-        self._inner_datasets: tp.List[AggregatedDataset] = [
-            self._ensure_aggregated(s) for s in sources
-        ]
-        self._labels: tp.List[int] = [s.label for s in sources]
+        self._inner_datasets = [self._ensure_aggregated(s) for s in sources]
+        self._labels = [s.label for s in sources]
 
-        # Wrap inner datasets into WeightedDataset so parent handles weights
         wrapped = [
-            WeightedDataset(
-                dataset=inner,
-                weight=src.weight,
-                name=inner.name,
-            )
+            WeightedDataset(dataset=inner, weight=src.weight, name=inner.name)
             for src, inner in zip(sources, self._inner_datasets)
         ]
-        # Call Dataset.__init__ directly to skip AggregatedDataset.__init__
-        # and re-implement it with the pre-built wrapped list
-        super(AggregatedDataset, self).__init__()  # type: ignore[call-arg]
-
-        self._name: str = _NameRegistry.register(name, type(self).__name__)
-        self._weighted = AggregatedDataset._resolve_weights(wrapped)
-        self._datasets = [s.dataset for s in self._weighted]
-        self._lengths = [len(ds) for ds in self._datasets]  # type: ignore[arg-type]
-        self._total = sum(self._lengths)
-        self._rebuild_cum_probs()
+        super().__init__(sources=wrapped, name=name)
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -147,33 +128,22 @@ class LabeledAggregatedDataset(AggregatedDataset):
     # Dataset interface
     # ------------------------------------------------------------------
 
-    def __getitem__(self, index: int) -> LabeledSample:
-        """
-        Return a :class:`LabeledSample` with sample, label, and full path.
 
-        Path is assembled by walking down the AggregatedDataset tree and
-        recording the name of each chosen node, joined with '/'.
-        """
+    def __getitem__(self, index: int) -> LabeledSample:
         r = torch.rand(1).item()
         dataset_idx = int(
-            torch.searchsorted(self._cum_probs, torch.tensor(r)).clamp(
-                0, len(self._datasets) - 1
-            )
+            torch.searchsorted(
+                self.cum_probs,
+                torch.tensor(r),
+            ).clamp(0, len(self._datasets) - 1)
         )
         inner_ds = self._inner_datasets[dataset_idx]
         source_name = self._weighted[dataset_idx].name or inner_ds.name
         label = self._labels[dataset_idx]
 
-        # Walk down the inner AggregatedDataset tree, collecting path segments
         sample, leaf_path = _sample_with_path(inner_ds)
-
         dataset_name = f"{self._name}/{source_name}/{leaf_path}" if leaf_path else f"{self._name}/{source_name}"
-
-        return LabeledSample(
-            sample=sample,
-            label=label,
-            dataset_name=dataset_name,
-        )
+        return LabeledSample(sample=sample, label=label, dataset_name=dataset_name)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -186,8 +156,7 @@ class LabeledAggregatedDataset(AggregatedDataset):
 
     def __repr__(self) -> str:
         parts = [
-            f"  [{i}] label={self._labels[i]}  "
-            f"{wd.name}(len={self._lengths[i]}, p={wd.weight:.4f})"
+            f"  [{i}] label={self._labels[i]}  {wd.name}(len={self._lengths[i]}, p={wd.weight:.4f})"
             for i, wd in enumerate(self._weighted)
         ]
         return f"LabeledAggregatedDataset(name={self._name!r},\n" + "\n".join(parts) + "\n)"

@@ -9,7 +9,7 @@ if tp.TYPE_CHECKING:
     from ..aggregated import AggregatedDataset
 
 
-class LossWeightingStrategy(WeightingStrategy):
+class StrategyLossWeighting(WeightingStrategy):
     """
     Curriculum sampling strategy that adjusts dataset weights based on
     per-source loss values.

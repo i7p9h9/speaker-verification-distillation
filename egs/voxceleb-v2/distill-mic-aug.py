@@ -1,3 +1,4 @@
+import shutil
 import typing as tp
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, colla
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
-from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
+from voicesdk.nn.arch import CAMPP, FeaturedModel, ReDimNetWrap, ResNetTF
 from voicesdk.utils.find_files import find_files_recursive
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,15 @@ SAMPLE_RATE = 16_000
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def backup_script(log_dir: Path) -> None:
+    """Copy the current script to log_dir/scripts/."""
+    src = Path(__file__).resolve()
+    dst_dir = log_dir / "scripts"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    shutil.copy2(src, dst)
+    print(f"Script backed up: {src} -> {dst}")
 
 def read_yaml(yaml_path: str) -> dict:
     with open(yaml_path, "r") as f:
@@ -129,7 +139,7 @@ def build_augmentation_pipeline() -> SequentialCompose:
                     Reverb(rir_provider=rir_provider_real, name="reverb_real", wet_dry_range=(0.2, 0.5)),
                     Reverb(rir_provider=rir_provider_sim, name="reverb_sim", wet_dry_range=(0.2, 0.5)),
                 ],
-                weights=[1, 3, 1],
+                weights=[1, 4, 1],
                 name="reverb",
                 p=0.3,
             ),
@@ -144,7 +154,7 @@ def build_augmentation_pipeline() -> SequentialCompose:
                 p=1.0,
             ),
         ],
-        p=0.75,
+        p=0.5,
     )
 
 
@@ -328,6 +338,8 @@ def main() -> None:
         validate_every_n_epochs=1,
         limit_train_batches=STEPS_PER_EPOCH,
     )
+
+    backup_script(Path(LOG_DIR) / EXPERIMENT_NAME)
 
     trainer.fit(module_distill, train_dataloaders=loader_train, val_dataloaders=loader_train)
 

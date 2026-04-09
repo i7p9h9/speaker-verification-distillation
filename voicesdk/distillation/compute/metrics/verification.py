@@ -2,6 +2,11 @@ import numpy as np
 
 
 def compute_frr_far(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_unique, tar_counts = np.unique(tar, return_counts=True)
     imp_unique, imp_counts = np.unique(imp, return_counts=True)
     thresholds = np.unique(np.hstack((tar_unique, imp_unique)))
@@ -30,6 +35,11 @@ def compute_frr_far(tar, imp):
 
 
 def far_fix_frr(tar, imp, frr_point):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_unique, tar_counts = np.unique(tar, return_counts=True)
     imp_unique, imp_counts = np.unique(imp, return_counts=True)
     thresholds = np.unique(np.hstack((tar_unique, imp_unique)))
@@ -57,6 +67,11 @@ def far_fix_frr(tar, imp, frr_point):
 
 
 def htr(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_unique, tar_counts = np.unique(tar, return_counts=True)
     imp_unique, imp_counts = np.unique(imp, return_counts=True)
     thresholds = np.unique(np.hstack((tar_unique, imp_unique)))
@@ -84,6 +99,11 @@ def htr(tar, imp):
 
 
 def compute_frr_far_old(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     pt = np.concatenate((np.ones(len(tar)), np.zeros(len(imp))), axis=0)
     pi = np.concatenate((np.zeros(len(tar)), np.ones(len(imp))), axis=0)
 
@@ -110,6 +130,11 @@ def compute_frr_far_old(tar, imp):
 
 
 def compute_eer(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_imp, fr, fa = compute_frr_far(tar, imp)
 
     index_min = np.argmin(np.abs(fr - fa))
@@ -120,6 +145,9 @@ def compute_eer(tar, imp):
 
 
 def compute_eer_fast(scores_target, scores_impostor, n=1000):
+    scores_target = scores_target[~np.isnan(scores_target)]
+    scores_impostor = scores_impostor[~np.isnan(scores_impostor)]
+
     n_imps = len(scores_impostor)
     n_tars = len(scores_target)
 
@@ -158,6 +186,11 @@ def compute_eer_fast(scores_target, scores_impostor, n=1000):
 
 
 def compute_min_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_imp, fnr, fpr = compute_frr_far(tar, imp)
 
     beta = c_fa * (1 - p_target) / (c_miss * p_target)
@@ -171,6 +204,11 @@ def compute_min_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
 
 
 def compute_act_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     beta = c_fa * (1 - p_target) / (c_miss * p_target)
     log_beta = np.log(beta)
 
@@ -186,6 +224,11 @@ def compute_act_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
 
 
 def compute_min_dcf(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     min_c, threshold, log_beta = compute_min_c(tar, imp, c_miss, c_fa, p_target)
 
     # Normalization factor: cost of naive system
@@ -196,6 +239,11 @@ def compute_min_dcf(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
 
 
 def compute_all_costs(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     beta = c_fa * (1 - p_target) / (c_miss * p_target)
     c_default = min(c_miss * p_target, c_fa * (1 - p_target))
 
@@ -219,6 +267,11 @@ def compute_all_costs(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
 
 
 def compute_llr_c(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     sum_tar = np.sum([np.log(1. + 1. / np.exp(score)) for score in tar])
     sum_imp = np.sum([np.log(1. + np.exp(score)) for score in imp])
 
@@ -228,10 +281,20 @@ def compute_llr_c(tar, imp):
 
 
 def get_eer(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     return compute_eer(tar, imp)[0]
 
 
 def get_min_c(tar, imp, c_miss=1, c_fa=1, p_target=0.01):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     if not hasattr(p_target, '__iter__'):
         p_target = [p_target]
 
@@ -250,10 +313,20 @@ def get_act_c(p_target, tar, imp, c_miss=1, c_fa=1):
 
 
 def get_llr_c(tar, imp):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     return compute_llr_c(tar, imp)
 
 
 def get_fr_fa_at_threshold(tar, imp, threshold=0.5):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     fr = len(np.where(tar < threshold)[0])
     fa = len(np.where(imp > threshold)[0])
     fr = fr * 100. / len(tar)
@@ -262,16 +335,31 @@ def get_fr_fa_at_threshold(tar, imp, threshold=0.5):
 
 
 def get_acer_at_threshold(tar, imp, threshold=0.5):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     fr, fa = get_fr_fa_at_threshold(tar, imp, threshold=threshold)
     return (fr + fa) / 2.0
 
 
 def get_bpcer_at_apcer(tar, imp, apcer=1):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_imp, fr, fa = compute_frr_far(tar, imp)
     return 100.0 * fr[np.argmax(fa <= (apcer / 100.))]
 
 
 def get_apcer_at_bpcer(tar, imp, bpcer=1):
+    tar = np.asarray(tar)
+    imp = np.asarray(imp)
+    tar = tar[~np.isnan(tar)]
+    imp = imp[~np.isnan(imp)]
+
     tar_imp, fr, fa = compute_frr_far(tar, imp)
     return 100.0 * fa[np.argmin(fr <= (bpcer / 100.))]
 

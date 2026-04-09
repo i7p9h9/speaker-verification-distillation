@@ -24,7 +24,7 @@ from torch import nn
 
 from voicesdk.dataset import (
     LabeledAggregatedDataset,
-    LossWeightingStrategy,
+    StrategyLossWeighting,
 )
 from voicesdk.distillation.validation import ValidatorBase
 from voicesdk.nn.loss import AMSoftmaxLoss
@@ -345,7 +345,7 @@ class AntispoofLightningModule(pl.LightningModule):
         backbone: nn.Module,
         am_loss: AMSoftmaxLoss,
         dataset: LabeledAggregatedDataset,
-        strategy: LossWeightingStrategy,
+        strategy: StrategyLossWeighting,
         weight_logger: WeightLogger,
         validators: tp.Optional[tp.List[ValidatorBase]] = None,
         learning_rate: float = 1e-3,
@@ -377,7 +377,16 @@ class AntispoofLightningModule(pl.LightningModule):
         self.aug_sample_rate = aug_sample_rate
 
         self.save_hyperparameters(
-            ignore=["backbone", "am_loss", "dataset", "strategy", "weight_logger", "aug_pipeline"]
+            ignore=[
+                "backbone",
+                "am_loss",
+                "joined_model",
+                "dataset",
+                "strategy",
+                "weight_logger",
+                "aug_pipeline",
+                "validators",
+            ]
         )
 
     # ----------------------------------------------------------------------- #

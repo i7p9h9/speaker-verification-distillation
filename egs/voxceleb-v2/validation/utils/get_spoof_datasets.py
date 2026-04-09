@@ -59,9 +59,9 @@ def get_asv_spoof_17(
         for row in reader_csv:
             full_path = str(Path(dir_main) / row["path"])
             if row["type"].strip().lower() == "replay":
-                live_paths.append(full_path)
-            else:
                 spoof_paths.append(full_path)
+            else:
+                live_paths.append(full_path)
 
     live_paths = _sample(live_paths, limit_live, seed)
     spoof_paths = _sample(spoof_paths, limit_spoof, seed)
