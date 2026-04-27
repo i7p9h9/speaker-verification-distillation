@@ -115,7 +115,7 @@ class CAMPPlus(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, x):
-        x = x.permute(0, 2, 1)  # (B,T,F) => (B,F,T)
+        # x = x.permute(0, 2, 1)  # (B,T,F) => (B,F,T)
         x = self.head(x)
         x = self.xvector(x)
         return x

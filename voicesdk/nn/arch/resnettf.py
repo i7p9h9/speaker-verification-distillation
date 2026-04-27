@@ -9,8 +9,6 @@ from scipy.signal import windows
 from torch import Tensor
 from torch.nn.modules.utils import _pair
 
-from voicesdk.nn.layers import pooling as pooling_layers
-
 
 def pad_dim_zeros_convertable(x, padding, dim=-1, pad_end=True):
     last_dim = x.ndim - 1
@@ -960,7 +958,7 @@ class ResNetTF(nn.Module):
         if self.features is not None:
             h = self.features(x)
         else:
-            h = x
+            h = x.unsqueeze(1)
         h = self.backbone(h)
         h = self.pre_pool(h)
         h = self.pooling(h)

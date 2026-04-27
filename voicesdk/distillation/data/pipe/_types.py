@@ -12,3 +12,4 @@ class AudioSegments:
     segments_duration: tp.List[float]  # Actual durations in seconds
     segments_weights: tp.List[float]  # Segment weights
     total_duration: float  # Total duration in seconds
+    dataset_name: str | None = None

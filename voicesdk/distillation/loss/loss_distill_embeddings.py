@@ -32,18 +32,22 @@ class LossDistillationEmbeddings(LossDistillationBase):
         self.layer_weights = layer_weights
 
         if loss_type == 'mse':
-            self.loss_fn = nn.MSELoss()
+            self.loss_fn = lambda x, y: F.mse_loss(x, y, reduction='none').mean(dim=tuple(range(1, x.ndim)))
         elif loss_type == 'l1':
-            self.loss_fn = nn.L1Loss()
+            self.loss_fn = lambda x, y: F.l1_loss(x, y, reduction='none').mean(dim=tuple(range(1, x.ndim)))
         elif loss_type == 'cosine':
-            self.loss_fn = lambda x, y: 1 - F.cosine_similarity(x, y, dim=-1).mean()  # pylint: disable=not-callable
+            self.loss_fn = lambda x, y: 1 - F.cosine_similarity(x, y, dim=-1)  # pylint: disable=not-callable
         elif loss_type == 'cosine_embedding':
-            self.loss_fn = lambda x, y: F.cosine_embedding_loss(x, y, target=1)
+            # cosine_embedding_loss with reduction='none' returns per-sample values
+            self.loss_fn = lambda x, y: F.cosine_embedding_loss(
+                x, y,
+                target=torch.ones(x.shape[0], device=x.device),
+                reduction='none',
+            )
         elif loss_type == 'cosine_log':
             self.loss_fn = lambda x, y: -torch.log(
                 torch.clamp((1 + F.cosine_similarity(x, y, dim=-1)) / 2, min=1e-6)
-            ).mean()
-
+            )
         else:
             raise ValueError(f"Unknown loss type: {loss_type}")
 
@@ -52,11 +56,16 @@ class LossDistillationEmbeddings(LossDistillationBase):
         student_emb: torch.Tensor,
         teacher_emb: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute loss for a single embedding pair."""
+        """Compute per-sample loss for a single embedding pair.
+
+        Returns:
+            Tensor of shape [B] with per-sample loss values.
+        """
         if self.normalize:
             student_emb = F.normalize(student_emb, p=2, dim=-1)
             teacher_emb = F.normalize(teacher_emb, p=2, dim=-1)
 
+        # loss_fn returns shape [B]
         return self.loss_fn(student_emb, teacher_emb)
 
     def forward(
@@ -81,13 +90,25 @@ class LossDistillationEmbeddings(LossDistillationBase):
                 raise ValueError("Number of embedding layers must match")
 
             weights = self.layer_weights or [1.0] * len(student_emb)
-            total_loss = torch.tensor(0.0, device=student_emb[0].device)
+            weights_sum = sum(weights)
 
-            for _, (s_emb, t_emb, w) in enumerate(zip(student_emb, teacher_emb, weights)):
-                total_loss = total_loss + w * self._compute_single_loss(s_emb, t_emb)
+            # per_layer_losses: list of [B] tensors, one per layer
+            per_layer_losses: tp.List[torch.Tensor] = [
+                self._compute_single_loss(s_emb, t_emb)
+                for s_emb, t_emb in zip(student_emb, teacher_emb)
+            ]
 
-            loss = total_loss / sum(weights)
+            # Weighted sum across layers -> [B]
+            loss_values = sum(
+                w * layer_loss
+                for w, layer_loss in zip(weights, per_layer_losses)
+            ) / weights_sum  # type: ignore[assignment]
+
+            value = loss_values.mean()
+
         else:
-            loss = self._compute_single_loss(student_emb, teacher_emb)
+            # loss_values: [B], value: scalar
+            loss_values = self._compute_single_loss(student_emb, teacher_emb)
+            value = loss_values.mean()
 
-        return DFLossDistillationEmbeddings(value=loss)
+        return DFLossDistillationEmbeddings(value=value, loss_batch=loss_values)

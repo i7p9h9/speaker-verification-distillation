@@ -400,6 +400,14 @@ class AntispoofLightningModule(pl.LightningModule):
         emb = self.backbone(x)
         return self.am_loss.predict(emb)
 
+    def get_current_learning_rate(self):
+        scheduler = self.lr_schedulers()
+
+        if scheduler is not None:
+            current_lr = scheduler.get_last_lr()[0]
+
+        return current_lr
+
     # ----------------------------------------------------------------------- #
     # Training                                                                  #
     # ----------------------------------------------------------------------- #
@@ -424,7 +432,11 @@ class AntispoofLightningModule(pl.LightningModule):
         per_dataset_loss = aggregate_loss_per_dataset(
             dataset_names, am_out.loss_values
         )
-        self.strategy.update(per_dataset_loss)
+
+        lr_strategy = 1.0
+        if self.current_epoch > 5:
+            lr_strategy = self.get_current_learning_rate() / self.learning_rate
+        self.strategy.update(per_dataset_loss, lr=lr_strategy)
 
         # ---- dataset weight logging (TB + CSV) ---------------------------
         self.weight_logger.maybe_log(

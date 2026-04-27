@@ -276,19 +276,20 @@ class FbankAug(nn.Module):
 
 
 class TFMelBanks(nn.Module):
-    def __init__(self, 
-        sample_rate=16000, 
-        n_fft=512, 
-        win_length=400, 
+    def __init__(self,
+        sample_rate=16000,
+        n_fft=512,
+        win_length=400,
         hop_length=160,
-        f_min = 20, 
-        f_max = 7600, 
-        n_mels = 80, 
+        f_min = 20,
+        f_max = 7600,
+        n_mels = 80,
         do_spec_aug=False,
         norm_signal=False,
         do_preemph=True,
+        mode="melbanks",
         freq_start_bin = 0,
-        freq_mask_width = (0, 8), 
+        freq_mask_width = (0, 8),
         time_mask_width = (0, 10),
         eps = 1e-8
     ):
@@ -306,7 +307,7 @@ class TFMelBanks(nn.Module):
                 normalize_spectrogram = False,
                 normalize_signal = False,
                 eps = eps,
-                mode = 'melbanks',
+                mode = mode,
                 low_freq = f_min,
                 high_freq = f_max,
                 num_bins = n_mels,

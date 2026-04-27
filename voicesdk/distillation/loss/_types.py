@@ -10,6 +10,11 @@ from torch import nn
 class DFLossBase:
     """Base class for all loss outputs."""
     value: torch.Tensor
+    loss_batch: torch.Tensor | None = None
+
+    @property
+    def loss(self) -> torch.Tensor:
+        return self.value
 
     def backward(self) -> None:
         self.value.backward()

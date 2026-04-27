@@ -14,12 +14,7 @@ from validation import TrialBasedValidator, ValidationTrial, VoxDataset
 
 from voicesdk.dataset import MarkedDataset, StrategyMomentumLossWeighting, UnLabeledSource, WeightedDataset
 from voicesdk.dataset.strategy import WeightLogger
-from voicesdk.distillation.data import (
-    AudioReaderFull,
-    AudioReaderRandom,
-    AudioReaderTelSimulated,
-    collate_batch_segments_fn,
-)
+from voicesdk.distillation.data import AudioReaderFull, AudioReaderRandom, collate_batch_segments_fn
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
@@ -33,22 +28,11 @@ from voicesdk.utils.find_files import find_files_recursive
 STEPS_PER_EPOCH = 5000
 MAX_EPOCH = 25
 
-# TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
-# TEACHER_CKPT = "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"
+TEACHER_CFG = "data/cfg-models/rn100_v016_flr_vox4_v2.yaml"
+TEACHER_CKPT = "data/ckpt/rn100_v016_flr_vox4_v2/model.pt"
 
-TEACHER_CFG = "data/cfg-models/rn100_tel.yaml"
-TEACHER_CKPT = "data/ckpt/rn100_tel4/model_44.pt"
-
-# STUDENT_CFG = "data/cfg-models/redimnet_pt_L.yaml"
-# STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
-
-STUDENT_CFG = "data/cfg-models/resnettf_34.yaml"
-STUDENT_CKPT = "data/exps/mic-emb-cosine-014/student-last.ckpt"
-
-# STUDENT_CFG = "data/cfg-models/resnettf_50.yaml"
-# STUDENT_CKPT = "data/exps/vox2-emb-cosine-002/checkpoints/student-last.ckpt"
-# STUDENT_CKPT = "data/exps/mic-emb-cosine-020/epoch=23-step=120000-student.pt"
-
+STUDENT_CFG = "data/cfg-models/redimnet_pt_L.yaml"
+STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
 # STUDENT_CKPT = None
 
 HEAD_CKPT = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid.pt"
@@ -75,7 +59,7 @@ DIR_RIR = Path("/media/ssd/voice/datasets/RIRs/RIRS_NOISES/")
 DIR_NOISE = Path("/media/ssd/voice/datasets/musan/")
 
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "tel-emb-cosine-022"
+EXPERIMENT_NAME = "mic-emb-cosine-019"
 SAMPLE_RATE = 16_000
 
 
@@ -106,18 +90,43 @@ def get_teacher() -> nn.Module:
     return model
 
 
-# def get_student() -> nn.Module:
-#     cfg = read_yaml(STUDENT_CFG)
-#     model = ReDimNetWrap(**cfg["model_args"])
-#     if STUDENT_CKPT is not None:
-#         model.load_state_dict(torch.load(STUDENT_CKPT))
-#     return model
-
 def get_student() -> nn.Module:
-    cfg = read_yaml(STUDENT_CFG)
-    model = ResNetTF(**cfg["model_args"])
-    if STUDENT_CKPT is not None:
-        model.load_state_dict(torch.load(STUDENT_CKPT))
+    # backbone = CAMPP(
+    #     feat_dim=80,
+    #     embedding_size=256,
+    #     growth_rate=32,
+    #     bn_size=4,
+    #     init_channels=128,
+    #     config_str='batchnorm-relu',
+    #     memory_efficient=False
+    # )
+    backbone = CAMPP(
+        feat_dim=80,
+        embedding_size=256,
+        growth_rate=32,
+        bn_size=8,
+        init_channels=256,
+        config_str='batchnorm-relu',
+        memory_efficient=False
+    )
+    model = FeaturedModel(
+        backbone=backbone,
+        feat_type="tf",
+        num_bins=80,
+        hop_length=160,
+        params={
+            "norm_signal": True,
+            "win_length": 400,
+            "hop_length": 160,
+            "n_fft": 512,
+            "sample_rate": 16000,
+            "eps": 1e-06,
+            "mode": "melbanks",
+            "f_min": 20,
+            "f_max": 7600,
+            "n_mels": 80,
+        }
+    )
     return model
 
 
@@ -283,12 +292,7 @@ def main() -> None:
         segments_step_ms=4000,
         sample_rate=SAMPLE_RATE,
     )
-    reader_train = AudioReaderTelSimulated(
-        norm_type="std",
-        length_segment_ms=3000,
-        p_tel=0.8
-    )
-    # reader_train = AudioReaderRandom(norm_type="std", length_segment_ms=3000)
+    reader_train = AudioReaderRandom(norm_type="std", length_segment_ms=3000)
 
     dataset_val = VoxDataset(reader=reader_val, root=VAL_ROOT)
     dataset_train = MarkedDataset(sources=[

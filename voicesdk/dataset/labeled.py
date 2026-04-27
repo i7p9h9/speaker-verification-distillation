@@ -6,7 +6,7 @@ import torch
 
 from ._registry import _NameRegistry
 from ._shared_weights import SharedWeights
-from ._type import LabeledSample, LabeledSource, WeightedDataset
+from ._type import LabeledSample, NamedSample, LabeledSource, UnLabeledSource, WeightedDataset
 from .aggregated import AggregatedDataset
 
 
@@ -160,3 +160,36 @@ class LabeledAggregatedDataset(AggregatedDataset):
             for i, wd in enumerate(self._weighted)
         ]
         return f"LabeledAggregatedDataset(name={self._name!r},\n" + "\n".join(parts) + "\n)"
+
+
+class MarkedDataset(LabeledAggregatedDataset):
+    def __init__(
+        self,
+        sources: tp.List[UnLabeledSource],
+        name: tp.Optional[str] = None,
+    ) -> None:
+        assert len(sources) > 0, "At least one LabeledSource must be provided"
+
+        self._inner_datasets = [self._ensure_aggregated(s) for s in sources]
+
+        wrapped = [
+            WeightedDataset(dataset=inner, weight=src.weight, name=inner.name)
+            for src, inner in zip(sources, self._inner_datasets)
+        ]
+
+        AggregatedDataset.__init__(self, sources=wrapped, name=name)
+
+    def __getitem__(self, index: int) -> NamedSample:
+        r = torch.rand(1).item()
+        dataset_idx = int(
+            torch.searchsorted(
+                self.cum_probs,
+                torch.tensor(r),
+            ).clamp(0, len(self._datasets) - 1)
+        )
+        inner_ds = self._inner_datasets[dataset_idx]
+        source_name = self._weighted[dataset_idx].name or inner_ds.name
+
+        sample, leaf_path = _sample_with_path(inner_ds)
+        dataset_name = f"{self._name}/{source_name}/{leaf_path}" if leaf_path else f"{self._name}/{source_name}"
+        return NamedSample(sample=sample, dataset_name=dataset_name)

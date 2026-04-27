@@ -21,6 +21,7 @@ class BatchSegments:
     segment_to_sample: torch.Tensor  # (N,) int64
     batch_size: int
     target: tp.Optional[torch.Tensor] = None  # (B,)
+    dataset_names: tp.List[str] | None = None # (B,)
 
 
 @dataclass

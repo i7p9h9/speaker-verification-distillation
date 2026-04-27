@@ -30,14 +30,51 @@ class AudioReaderBase(ABC):
         self,
         norm_type: str,
         sample_rate: int = 16000,
+        force_resample: bool = False
     ):
         """
         Args:
             norm_type: Normalization type ('std' for z-score, anything else for peak normalization)
             sample_rate: Expected sample rate of audio files
         """
+        self._force_resample = force_resample
+        self._sinc_pool: tp.Tuple[SincWindowConfig, ...] = _DEFAULT_SINC_CONFIGS
+        self._rng = np.random.default_rng()
+
         self.norm_type = norm_type
         self.sample_rate = sample_rate
+
+    @property
+    def filter_spec(self):
+        return _DEFAULT_SINC_CONFIGS[0]
+
+    def _resolve_filter(self) -> FilterSpec:
+        """Return the filter spec to use for the current call."""
+        if self.filter_spec is not None:
+            return self.filter_spec
+        # Random choice from the sinc_window pool
+        idx = int(self._rng.integers(0, len(self._sinc_pool)))
+        return self._sinc_pool[idx]
+
+    def _resample(
+        self,
+        signal: np.ndarray,
+        sr_in: int,
+        sr_out: int,
+        spec: FilterSpec,
+    ) -> np.ndarray:
+        """Single resampy call, dispatched on filter spec type."""
+        if isinstance(spec, str):
+            return resampy.resample(signal, sr_in, sr_out, filter=spec)
+
+        # SincWindowConfig dict — unpack as sinc_window kwargs
+        return resampy.resample(
+            signal,
+            sr_in,
+            sr_out,
+            filter="sinc_window",
+            **spec,
+        )
 
     # ------------------------------------------------------------------
     # I/O helpers
@@ -46,6 +83,11 @@ class AudioReaderBase(ABC):
     def load(self, filename: str) -> np.ndarray:
         """Load a wav file and return a mono float32 signal."""
         signal, sr = sf.read(filename, dtype="float32")
+        if self._force_resample:
+            spec = self._resolve_filter()
+            signal = self._resample(signal, sr_in=sr, sr_out=self.sample_rate, spec=spec)
+            sr = self.sample_rate
+
         assert sr == self.sample_rate, (
             f"Expected sample rate {self.sample_rate}, got {sr} in '{filename}'"
         )
@@ -119,6 +161,7 @@ class AudioReaderFull(AudioReaderBase):
         length_segment_ms: tp.Optional[int] = None,
         segments_step_ms: tp.Optional[int] = None,
         sample_rate: int = 16000,
+        force_resample: bool = False
     ):
         """
         Args:
@@ -127,7 +170,7 @@ class AudioReaderFull(AudioReaderBase):
             segments_step_ms: Hop between segments in ms (None = equals length_segment_ms, i.e. no overlap)
             sample_rate: Expected sample rate
         """
-        super().__init__(norm_type=norm_type, sample_rate=sample_rate)
+        super().__init__(norm_type=norm_type, sample_rate=sample_rate, force_resample=force_resample)
         self.length_segment_ms = length_segment_ms
         self.segments_step_ms = (
             segments_step_ms if segments_step_ms is not None else length_segment_ms
@@ -324,7 +367,7 @@ class AudioReaderTelSimulated(AudioReaderBase):
         super().__init__(norm_type=norm_type, sample_rate=sample_rate)
         self.length_segment_ms = length_segment_ms
         self.p_tel = p_tel
-        self.filter_spec = filter_spec
+        self._filter_spec = filter_spec
         self._sinc_pool: tp.Tuple[SincWindowConfig, ...] = (
             sinc_configs if sinc_configs is not None else _DEFAULT_SINC_CONFIGS
         )
@@ -359,8 +402,8 @@ class AudioReaderTelSimulated(AudioReaderBase):
 
     def _resolve_filter(self) -> FilterSpec:
         """Return the filter spec to use for the current call."""
-        if self.filter_spec is not None:
-            return self.filter_spec
+        if self._filter_spec is not None:
+            return self._filter_spec
         # Random choice from the sinc_window pool
         idx = int(self._rng.integers(0, len(self._sinc_pool)))
         return self._sinc_pool[idx]

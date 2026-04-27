@@ -5,6 +5,7 @@ from .redimnet import ReDimNet, ReDimNetWrap
 from .resnet import ResNet34, ResNet50
 from .ResNetSE import ResNetSE34, ResNetSE50, ResNetSE100
 from .resnettf import ResNetTF, ResNetTFSubNetS
+from .tiny_vad import TorchSileroVAD
 
 __all__ = [
     'ReDimNet',
@@ -18,5 +19,6 @@ __all__ = [
     "ResNetSE100",
     "CAMPP",
     "FeaturedModel",
-    "ECAPA_TDNN"
+    "ECAPA_TDNN",
+    "TorchSileroVAD"
 ]

@@ -1,11 +1,17 @@
 import math
 import typing as tp
+from collections import defaultdict
 from dataclasses import fields
 
 import pytorch_lightning as pl
 import torch
 from torch import nn
 
+from voicesdk.dataset import (
+    AggregatedDataset,
+    StrategyLossWeighting,
+)
+from voicesdk.dataset.strategy import WeightLogger
 from voicesdk.distillation.data import BatchSegments
 from voicesdk.distillation.loss import DFLossBase, LossDistillationBase, ModelOutput
 from voicesdk.distillation.validation import ValidatorBase
@@ -38,6 +44,30 @@ def _augment_batch(
     return result.output, result.original
 
 
+def aggregate_loss_per_dataset(
+    dataset_names: tp.List[str],
+    loss_values: torch.Tensor,
+) -> tp.Dict[str, float]:
+    """Average detached per-sample losses grouped by dataset name.
+
+    Gradients are NOT retained — only plain Python floats are returned so that
+    ``strategy.update()`` never holds a reference to the live computation graph.
+
+    Args:
+        dataset_names: One name string per sample in the batch.
+        loss_values: Per-sample loss tensor ``(B,)``; detached inside here.
+
+    Returns:
+        ``{dataset_name: mean_loss_float}`` for every dataset in the batch.
+    """
+    sums: tp.Dict[str, float] = defaultdict(float)
+    counts: tp.Dict[str, int] = defaultdict(int)
+    for name, val in zip(dataset_names, loss_values.detach().cpu().tolist()):
+        sums[name]   += val
+        counts[name] += 1
+    return {name: sums[name] / counts[name] for name in sums}
+
+
 class DistillationLightningModule(pl.LightningModule):
     """
     PyTorch Lightning module for knowledge distillation training.
@@ -49,6 +79,9 @@ class DistillationLightningModule(pl.LightningModule):
         student_model: nn.Module,
         loss_fn: LossDistillationBase,
         validators: tp.Optional[tp.List[ValidatorBase]] = None,
+        strategy: StrategyLossWeighting | None = None,
+        weight_logger: WeightLogger | None = None,
+        dataset: AggregatedDataset | None = None,
         learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
         warmup_steps: int = 1000,
@@ -87,6 +120,10 @@ class DistillationLightningModule(pl.LightningModule):
         self.loss_fn = loss_fn
         self.validators = validators or []
 
+        self.strategy = strategy
+        self.dataset = dataset
+        self.weight_logger = weight_logger
+
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
@@ -106,7 +143,17 @@ class DistillationLightningModule(pl.LightningModule):
             param.requires_grad = False
 
         # Save hyperparameters
-        self.save_hyperparameters(ignore=["teacher_model", "student_model", "loss_fn", "validators", "aug_pipeline"])
+        self.save_hyperparameters(ignore=[
+            "teacher_model",
+            "student_model",
+            "loss_fn",
+            "validators",
+            "aug_pipeline",
+            "strategy",
+            "dataset",
+            "aug_pipeline",
+            "weight_logger"
+        ])
 
         # Training context
         self._current_context: tp.Optional[TrainingFlowContext] = None
@@ -114,6 +161,24 @@ class DistillationLightningModule(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> ModelOutput:
         """Forward pass through student model."""
         return self.student_model(x)
+
+    def strategy_step(self, loss_batch: torch.Tensor, dataset_names: tp.List[str] | None = None):
+        if self.strategy is None or dataset_names is None:
+            return
+
+        per_dataset_loss = aggregate_loss_per_dataset(
+            dataset_names, loss_batch
+        )
+
+        lr_strategy = 1.0
+        if self.current_epoch > 5:
+            lr_strategy = self.get_current_learning_rate() / self.learning_rate
+        self.strategy.update(per_dataset_loss, lr=lr_strategy)
+
+        self.weight_logger.maybe_log(
+            self.dataset.get_weights(),
+            global_step=self.global_step,
+        )
 
     def training_step(
         self,
@@ -129,6 +194,8 @@ class DistillationLightningModule(pl.LightningModule):
 
         segments_teacher = batch.segments
         segments_student = batch.segments
+
+        dataset_names: tp.List[str] | None = batch.dataset_names  # len == B
 
         if self.aug_pipeline is not None:
             augmented, original = _augment_batch(batch.segments, self.aug_pipeline, self.aug_sample_rate)
@@ -150,6 +217,8 @@ class DistillationLightningModule(pl.LightningModule):
             step=self.global_step,
         )
 
+        self.strategy_step(loss_batch=loss_result.loss_batch.detach(), dataset_names=dataset_names)
+
         self._current_context.add_loss("distillation", loss_result)
         self._log_training_losses(loss_result)
 
@@ -160,6 +229,8 @@ class DistillationLightningModule(pl.LightningModule):
         for field in fields(loss_result):
             value = getattr(loss_result, field.name)
             if isinstance(value, torch.Tensor):
+                if value.numel() > 1:
+                    continue
                 self.log(
                     f"train/{field.name}",
                     value,

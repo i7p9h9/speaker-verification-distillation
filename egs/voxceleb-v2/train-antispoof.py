@@ -63,7 +63,7 @@ NUM_WORKERS: int = 8
 
 # Logging
 LOG_DIR: str = "data/exps/"
-EXPERIMENT_NAME: str = "antispoof-join-no-codecs-train-013"
+EXPERIMENT_NAME: str = "antispoof-join-train-015"
 LOG_WEIGHTS_EVERY: int = 100  # steps between dataset-weight log entries
 
 # Dataset roots
@@ -77,6 +77,10 @@ PATH_TRAIN_LIBRI: str = "/media/ssd/voice/datasets/librispeech/"
 PATH_TRAIN_MCV13: str = "/media/ssd/voice/datasets/mcv13"
 PATH_TRAIN_VOXTUBE: str = "/media/ssd/voice/datasets/voxtube"
 PATH_TRAIN_ASV21: str = "/media/ssd/voice/datasets/ASV21Eval"
+
+PATH_TRAIN_CN_CELEB: str = "/media/ssd/voice/datasets/cn-celeb_v2/CN-Celeb_wav-16k"
+PATH_TRAIN_LIVE_CML: str = "/media/ssd/voice/datasets/antispoof/live/cml"
+
 
 # Synthesis
 PATH_TRAIN_CODECS: str = "/media/ssd/voice/datasets/antispoof/codecs-16k/audio_codecs_results"
@@ -319,6 +323,11 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         ignore_empty=False,
         prefix="legacy-",
     )
+    create_live_source = partial(
+        sources_from_subfolders,
+        factory=dataset_factory,
+        ignore_empty=False,
+    )
 
     sources: tp.List[LabeledSource] = []
 
@@ -339,10 +348,10 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_TIDY_1))],
         label=label_live, weight=1.0, name="tidy_voice_1",
     ))
-    # sources.append(LabeledSource(
-    #     dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_TIDY_2))],
-    #     label=0, weight=1.0, name="tidy_voice_2",
-    # ))
+    sources.append(LabeledSource(
+        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_TIDY_2))],
+        label=0, weight=1.0, name="tidy_voice_2",
+    ))
     sources.append(LabeledSource(
         dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_VCTK))],
         label=label_live, weight=1.0, name="VCTK",
@@ -363,16 +372,26 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_ASV21))],
         label=label_live, weight=1.0, name="asv-21",
     ))
+    sources.append(LabeledSource(
+        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_TRAIN_CN_CELEB))],
+        label=label_live, weight=1.0, name="cn-celeb-v2",
+    ))
+    sources += create_live_source(
+        root=PATH_TRAIN_LIVE_CML,
+        label=label_live,
+        source_weight=0.8,
+        prefix="cml-"
+    )
 
     # spoof — LA
-    sources.append(LabeledSource(
-        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV21_EVAL_LA))],
-        label=label_la, weight=0.2, name="ASV21Eval_LA",
-    ))
-    sources.append(LabeledSource(
-        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV19_EVAL_LA))],
-        label=label_la, weight=0.2, name="ASV19Eval_LA",
-    ))
+    # sources.append(LabeledSource(
+    #     dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV21_EVAL_LA))],
+    #     label=label_la, weight=0.2, name="ASV21Eval_LA",
+    # ))
+    # sources.append(LabeledSource(
+    #     dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV19_EVAL_LA))],
+    #     label=label_la, weight=0.2, name="ASV19Eval_LA",
+    # ))
     sources.append(LabeledSource(
         dataset=[WeightedDataset(VoxDataset(reader=reader, root=f"{PATH_PAD}/voxceleb_toloka_replays_2026_02_15-16k"))],
         label=label_la, weight=4.0, name="Replay-02-15",
@@ -383,18 +402,19 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
     ))
 
     # spoof — DF
-    sources.append(LabeledSource(
-        dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV21_EVAL_DF))],
-        label=label_df, weight=0.2, name="ASV21Eval_DF",
-    ))
+    # sources.append(LabeledSource(
+    #     dataset=[WeightedDataset(VoxDataset(reader=reader, root=PATH_SYN_ASV21_EVAL_DF))],
+    #     label=label_df, weight=0.2, name="ASV21Eval_DF",
+    # ))
 
     sources += create_spoof_source(
         root=PATH_SYN_TTS_COMMON, label=label_df, source_weight=2.0,
         ignore_pattern="*tts_test_set*",
     )
-    # sources += create_spoof_source(root=PATH_TRAIN_CODECS, source_weight=1.0)
+    # sources += create_spoof_source(root=PATH_TRAIN_CODECS, label=label_df, source_weight=1.0)
     sources += create_spoof_source(root=PATH_TRAIN_VC_TTS, label=label_df, source_weight=0.8)
-    sources += create_spoof_source(root=PATH_SYN_VOCODERS_V1, label=label_df, ignore_pattern="*BigVGAN*", source_weight=1.2)
+    # sources += create_spoof_source(root=PATH_SYN_VOCODERS_V1, label=label_df, ignore_pattern="*BigVGAN*", source_weight=1.2)
+    sources += create_spoof_source(root=PATH_SYN_VOCODERS_V1, label=label_df, source_weight=1.2)
     sources += create_spoof_source(root=PATH_SYN_VC_VOL1, label=label_df, source_weight=0.5)
     sources += create_spoof_source(root=PATH_SYN_VC_VOL2, label=label_df, ignore_pattern="*resamble_denoiser*", source_weight=1.0)
 

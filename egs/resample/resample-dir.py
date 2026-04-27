@@ -56,11 +56,12 @@ def _make_jobs(input_root: Path, output_root: Path) -> list[Job]:
             continue
         dst = _rel_dst_path(p, input_root, output_root)
         is_m4a = p.suffix.lower() == ".m4a"
-        if is_m4a:
+        is_flac = p.suffix.lower() == ".flac"
+        if is_m4a or is_flac:
             dst = dst.with_suffix(".wav")
         is_wav = p.suffix.lower() == ".wav"
 
-        jobs.append(Job(src=p, dst=dst, is_m4a=is_m4a, is_wav=is_wav))
+        jobs.append(Job(src=p, dst=dst, is_m4a=is_m4a or is_flac, is_wav=is_wav))
     return jobs
 
 
