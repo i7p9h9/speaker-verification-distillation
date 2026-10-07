@@ -116,8 +116,7 @@ class PLDA(object):
         if(self.simple_length_norm):
             normalization_factor = math.sqrt(self.dim) / np.linalg.norm(transformed_ivec)
         else:
-            normalization_factor = self.get_normalization_factor(transformed_ivec,
-                                                            num_example)
+            normalization_factor = self.get_normalization_factor(transformed_ivec, num_example)
         if(self.normalize_length):
             transformed_ivec = normalization_factor*transformed_ivec
 

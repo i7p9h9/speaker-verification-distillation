@@ -286,6 +286,7 @@ def main() -> None:
     reader_train = AudioReaderTelSimulated(
         norm_type="std",
         length_segment_ms=3000,
+        sample_rate=16000,
         p_tel=0.8
     )
     # reader_train = AudioReaderRandom(norm_type="std", length_segment_ms=3000)
