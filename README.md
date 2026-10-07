@@ -30,6 +30,34 @@ uv run python distill.py
 `egs/voxceleb-v2`. До обучения настройте в выбранном скрипте пути к датасетам,
 конфигурациям, весам учителя и центроидам. Эти данные не устанавливаются uv.
 
+## Docker и Dev Container
+
+Контейнер использует CUDA 12.4 и предназначен для запуска через NVIDIA
+Container Toolkit. Репозиторий не копируется в образ: Compose монтирует текущий
+каталог в `/workspace/formanta-distill`, поэтому все изменения файлов сразу
+остаются на хосте.
+
+Окружение uv и кэш хранятся отдельно в Docker volumes `uv-venv` и `uv-cache`.
+Они не создают локальную `.venv` и сохраняются между пересозданиями контейнера.
+
+Запуск из корня репозитория:
+
+```bash
+docker compose up --build -d
+docker compose exec dev uv sync --locked
+docker compose exec dev uv run python -c 'import torch; print(torch.cuda.get_device_name(0))'
+```
+
+Если UID/GID пользователя отличаются от 1000, перед первой сборкой передайте их:
+
+```bash
+USER_UID=$(id -u) USER_GID=$(id -g) docker compose build
+docker compose up -d
+```
+
+Для VS Code/Cursor достаточно выполнить `Dev Containers: Reopen in Container`.
+После создания контейнера `uv sync --locked` запускается автоматически.
+
 ## Добавление пакетов
 
 Из корня репозитория:

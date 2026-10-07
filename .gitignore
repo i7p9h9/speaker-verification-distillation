@@ -28,8 +28,9 @@ egs/voxceleb-v2/data/exps
 egs/voxceleb-v2/data/centroidsexps
 egs/voxceleb-v2/data/test_vox
 egs/voxceleb-v2/data/lda_analysis
-# egs/voxceleb-v2/data/*/**.*
-# !egs/voxceleb-v2/data/cfg-models
+egs/voxceleb-v2/data/*/**.*
+egs/voxceleb-v2/exps/
+!egs/voxceleb-v2/data/cfg-models
 
 # Distribution / packaging
 .Python
@@ -105,6 +106,7 @@ celerybeat-schedule
 
 # any json files
 *.json
+!.devcontainer/devcontainer.json
 !api/system-prompts/
 !api/system-prompts/**/*.json
 

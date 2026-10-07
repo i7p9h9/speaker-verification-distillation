@@ -5,13 +5,13 @@ from pathlib import Path
 import pytorch_lightning as pl
 import torch
 import yaml
-from audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, SequentialCompose
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
 from validation import TrialBasedValidator, ValidationTrial, VoxDataset
 
+from voicesdk.audiment.audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, SequentialCompose
 from voicesdk.dataset import MarkedDataset, StrategyMomentumLossWeighting, UnLabeledSource, WeightedDataset
 from voicesdk.dataset.strategy import WeightLogger
 from voicesdk.distillation.data import (
@@ -83,6 +83,7 @@ SAMPLE_RATE = 16_000
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def backup_script(log_dir: Path) -> None:
     """Copy the current script to log_dir/scripts/."""
     src = Path(__file__).resolve()
@@ -91,6 +92,7 @@ def backup_script(log_dir: Path) -> None:
     dst = dst_dir / src.name
     shutil.copy2(src, dst)
     print(f"Script backed up: {src} -> {dst}")
+
 
 def read_yaml(yaml_path: str) -> dict:
     with open(yaml_path, "r") as f:
@@ -112,6 +114,7 @@ def get_teacher() -> nn.Module:
 #     if STUDENT_CKPT is not None:
 #         model.load_state_dict(torch.load(STUDENT_CKPT))
 #     return model
+
 
 def get_student() -> nn.Module:
     cfg = read_yaml(STUDENT_CFG)
@@ -140,11 +143,13 @@ def get_trials_vox1(trial_path: str) -> tp.List[ValidationTrial]:
     with open(trial_path, "r") as f:
         for line in f:
             target, left, right = line.strip().split(" ")
-            trials.append(ValidationTrial(
-                trial_left=left,
-                trial_right=right,
-                is_target=target == "1",
-            ))
+            trials.append(
+                ValidationTrial(
+                    trial_left=left,
+                    trial_right=right,
+                    is_target=target == "1",
+                )
+            )
     return trials
 
 
@@ -155,9 +160,14 @@ def get_trials_vox1(trial_path: str) -> tp.List[ValidationTrial]:
 # when needed.
 # ---------------------------------------------------------------------------
 
+
 def build_augmentation_pipeline() -> SequentialCompose:
-    rir_provider_point = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "pointsource_noises", extension=".wav"))
-    rir_provider_real = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "real_rirs_isotropic_noises", extension=".wav"))
+    rir_provider_point = FileListAudioProvider(
+        paths=find_files_recursive(DIR_RIR / "pointsource_noises", extension=".wav")
+    )
+    rir_provider_real = FileListAudioProvider(
+        paths=find_files_recursive(DIR_RIR / "real_rirs_isotropic_noises", extension=".wav")
+    )
     rir_provider_sim = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "simulated_rirs", extension=".wav"))
 
     noise_provider_music = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "music", extension=".wav"))
@@ -178,9 +188,9 @@ def build_augmentation_pipeline() -> SequentialCompose:
             ),
             OneOf(
                 stages=[
-                    AddNoise(noise_provider=noise_provider_music,  name="noise_music",  snr_range=(-1.0, 10.0)),
-                    AddNoise(noise_provider=noise_provider_noise,  name="noise_noise",  snr_range=(-1.0, 10.0)),
-                    AddNoise(noise_provider=noise_provider_speech, name="noise_speech", snr_range=(5.0,  12.0)),
+                    AddNoise(noise_provider=noise_provider_music, name="noise_music", snr_range=(-1.0, 10.0)),
+                    AddNoise(noise_provider=noise_provider_noise, name="noise_noise", snr_range=(-1.0, 10.0)),
+                    AddNoise(noise_provider=noise_provider_speech, name="noise_speech", snr_range=(5.0, 12.0)),
                 ],
                 weights=[5, 5, 1],
                 name="noise",
@@ -194,6 +204,7 @@ def build_augmentation_pipeline() -> SequentialCompose:
 # ---------------------------------------------------------------------------
 # Validation callback
 # ---------------------------------------------------------------------------
+
 
 class ValidationCallback(Callback):
     """Runs validation at fixed step intervals."""
@@ -226,6 +237,7 @@ class ValidationCallback(Callback):
 # ---------------------------------------------------------------------------
 # Trainer factory
 # ---------------------------------------------------------------------------
+
 
 def create_trainer(
     tb_logger: TensorBoardLogger,
@@ -260,6 +272,7 @@ def create_trainer(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     # --- Models ---
     head = get_head()
@@ -283,62 +296,59 @@ def main() -> None:
         segments_step_ms=4000,
         sample_rate=SAMPLE_RATE,
     )
-    reader_train = AudioReaderTelSimulated(
-        norm_type="std",
-        length_segment_ms=3000,
-        sample_rate=16000,
-        p_tel=0.8
-    )
+    reader_train = AudioReaderTelSimulated(norm_type="std", length_segment_ms=3000, sample_rate=16000, p_tel=0.8)
     # reader_train = AudioReaderRandom(norm_type="std", length_segment_ms=3000)
 
     dataset_val = VoxDataset(reader=reader_val, root=VAL_ROOT)
-    dataset_train = MarkedDataset(sources=[
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VOX1))],
-            weight=0.8,
-            name="vox1"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VOX2))],
-            weight=1.0,
-            name="vox2"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_SPGI))],
-            weight=0.8,
-            name="spgi"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_CN_CELEB))],
-            weight=0.8,
-            name="cn-celeb"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_TIDY_1))],
-            weight=0.8,
-            name="tidy-1"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_TIDY_2))],
-            weight=0.8,
-            name="tidy-2"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VCTK))],
-            weight=0.8,
-            name="vctk"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_LIBRI))],
-            weight=0.8,
-            name="libri"
-        ),
-        UnLabeledSource(
-            [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_MCV13))],
-            weight=0.8,
-            name="mcv13"
-        ),
-    ])
+    dataset_train = MarkedDataset(
+        sources=[
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VOX1))],
+                weight=0.8,
+                name="vox1",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VOX2))],
+                weight=1.0,
+                name="vox2",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_SPGI))],
+                weight=0.8,
+                name="spgi",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_CN_CELEB))],
+                weight=0.8,
+                name="cn-celeb",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_TIDY_1))],
+                weight=0.8,
+                name="tidy-1",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_TIDY_2))],
+                weight=0.8,
+                name="tidy-2",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VCTK))],
+                weight=0.8,
+                name="vctk",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_LIBRI))],
+                weight=0.8,
+                name="libri",
+            ),
+            UnLabeledSource(
+                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_MCV13))],
+                weight=0.8,
+                name="mcv13",
+            ),
+        ]
+    )
 
     loader_train = DataLoader(
         dataset=dataset_train,
@@ -370,18 +380,22 @@ def main() -> None:
         log_every_n_steps=100,
     )
     all_callbacks: tp.List[Callback] = []
-    all_callbacks.append(ValidationCallback(
-        validate_every_n_epochs=1,
-        validate_every_n_steps=None,
-    ))
-    all_callbacks.append(ModelCheckpoint(
-        dirpath=ckpt_dir,
-        filename="{epoch}-{step}",
-        save_top_k=3,
-        monitor="val/vox1-base/eer",
-        mode='min',
-        save_last=True,
-    ))
+    all_callbacks.append(
+        ValidationCallback(
+            validate_every_n_epochs=1,
+            validate_every_n_steps=None,
+        )
+    )
+    all_callbacks.append(
+        ModelCheckpoint(
+            dirpath=ckpt_dir,
+            filename="{epoch}-{step}",
+            save_top_k=3,
+            monitor="val/vox1-base/eer",
+            mode="min",
+            save_last=True,
+        )
+    )
 
     strategy = StrategyMomentumLossWeighting(dataset_train, momentum=0.985, scale=7.0)
     module_distill = DistillationLightningModule(
@@ -401,7 +415,7 @@ def main() -> None:
         total_steps=STEPS_PER_EPOCH * MAX_EPOCH,
         # --- augmentation ---
         aug_pipeline=build_augmentation_pipeline(),
-        aug_teacher_original=False,   # False -> teacher also receives augmented audio
+        aug_teacher_original=False,  # False -> teacher also receives augmented audio
         aug_sample_rate=SAMPLE_RATE,
     )
 
@@ -414,7 +428,7 @@ def main() -> None:
         gradient_clip_val=1.0,
         all_callbacks=all_callbacks,
         limit_train_batches=STEPS_PER_EPOCH,
-        tb_logger=tb_logger
+        tb_logger=tb_logger,
     )
 
     backup_script(Path(LOG_DIR) / EXPERIMENT_NAME)

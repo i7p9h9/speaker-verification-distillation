@@ -1,0 +1,31 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+    init: true
+    working_dir: /workspace/formanta-distill
+    command: sleep infinity
+    shm_size: 8gb
+    gpus: all
+    environment:
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      UV_CACHE_DIR: /home/vscode/.cache/uv
+      UV_LINK_MODE: copy
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/formanta-distill
+      - type: volume
+        source: uv-venv
+        target: /opt/venv
+      - type: volume
+        source: uv-cache
+        target: /home/vscode/.cache/uv
+
+volumes:
+  uv-venv:
+  uv-cache:
