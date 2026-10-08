@@ -36,7 +36,7 @@ class ModelOutput:
         embeddings: Optional embeddings - can be single tensor or list of tensors
                     Shape can be (batch, dim) or (batch, seq, dim) or list of such
     """
-    logits: torch.Tensor
+    logits: torch.Tensor | None
     embeddings: tp.Optional[tp.Union[torch.Tensor, tp.List[torch.Tensor]]] = None
 
 

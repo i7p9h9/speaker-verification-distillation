@@ -137,6 +137,13 @@ class SpectralFeaturesTF(nn.Module):
         self.log_mels = log_mels
         self.build()
 
+    @property
+    def dim(self):
+        if self.features in ['melbanks']:
+            return self.num_bins
+        else:
+            return self.nfft // 2
+
     def build(self):
         assert self.nfft >= self.length
 
@@ -778,12 +785,16 @@ class TFSpectrogram(nn.Module):
         else:
             self.specaug = nn.Identity()
 
+    @property
+    def dim(self):
+        return self.spectrogram[-1].dim
+
     def forward(self, x):
         xdtype = x.dtype
         x = x.float()
         with torch.no_grad():
             with torch.amp.autocast('cuda', enabled=False):
-                x = self.spectrogram(x)+self.eps
+                x = self.spectrogram(x) + self.eps
                 x = x.log()
                 x = x - torch.mean(x, dim=-1, keepdim=True)
                 if self.training:

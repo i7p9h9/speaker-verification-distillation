@@ -192,7 +192,7 @@ class ECAPA_TDNN(nn.Module):
                 "fft_mode": "abs",
                 "shift_value": 0.0,
                 "normalize_spectrogram": True,
-                "return_img": True,
+                # "return_img": True,
             },
     ):
         super().__init__()
@@ -241,7 +241,7 @@ class ECAPA_TDNN(nn.Module):
 def ECAPA_TDNN_c1024(feat_dim, embed_dim, pooling_func='ASTP', emb_bn=False):
     return ECAPA_TDNN(
         channels=1024,
-        feat_dim=feat_dim,
+        # feat_dim=feat_dim,
         embed_dim=embed_dim,
         pooling_func=pooling_func,
         emb_bn=emb_bn

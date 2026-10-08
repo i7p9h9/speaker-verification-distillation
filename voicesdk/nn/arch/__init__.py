@@ -1,6 +1,6 @@
 from .campp import CAMPP
-from .ecapa import ECAPA_TDNN
-from .ecapa2 import ECAPA2, ECAPA2Output
+from .ecapa import ECAPA_TDNN, ECAPA_TDNN_c1024
+from .ecapa2 import ECAPA2, ECAPA2Output, ECAPA_TDNN_VAD
 from .featured_model import FeaturedModel
 from .redimnet import ReDimNet, ReDimNetWrap
 from .resnet import ResNet34, ResNet50
@@ -21,6 +21,7 @@ __all__ = [
     "CAMPP",
     "FeaturedModel",
     "ECAPA_TDNN",
+    "ECAPA_TDNN_VAD",
     "ECAPA2",
     "ECAPA2Output",
     "TorchSileroVAD",

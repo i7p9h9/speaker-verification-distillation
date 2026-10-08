@@ -23,7 +23,7 @@ from voicesdk.distillation.data import (
 from voicesdk.distillation.loss import LossDistillationEmbeddings
 from voicesdk.distillation.nn import HeadClassificationCentroids, HeadModelWrapper
 from voicesdk.distillation.training import DistillationLightningModule
-from voicesdk.nn.arch import CAMPP, FeaturedModel, ReDimNetWrap, ResNetTF
+from voicesdk.nn.arch import CAMPP, ECAPA2, ECAPA_TDNN_VAD, FeaturedModel, ReDimNetWrap, ResNetTF
 from voicesdk.utils.find_files import find_files_recursive
 
 # ---------------------------------------------------------------------------
@@ -42,40 +42,42 @@ TEACHER_CKPT = "data/ckpt/rn100_tel4/model_44.pt"
 # STUDENT_CFG = "data/cfg-models/redimnet_pt_L.yaml"
 # STUDENT_CKPT = "data/exps/vox2-emb-cosine-001/student-last.ckpt"
 
-STUDENT_CFG = "data/cfg-models/resnettf_34.yaml"
-STUDENT_CKPT = "data/exps/mic-emb-cosine-014/student-last.ckpt"
+# STUDENT_CFG = "data/cfg-models/resnettf_34.yaml"
+# STUDENT_CKPT = "data/exps/mic-emb-cosine-014/student-last.ckpt"
 
 # STUDENT_CFG = "data/cfg-models/resnettf_50.yaml"
 # STUDENT_CKPT = "data/exps/vox2-emb-cosine-002/checkpoints/student-last.ckpt"
 # STUDENT_CKPT = "data/exps/mic-emb-cosine-020/epoch=23-step=120000-student.pt"
 
-# STUDENT_CKPT = None
+STUDENT_CKPT = None
+
+DIR_MAIN = "/media/shared/data/verification"
 
 HEAD_CKPT = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid.pt"
 HEAD_SPEAKERS = "data/centroids/vox2/rn100_v016_flr_vox4_v2/head_centroid_speakers.json"
 
-PATH_TRAIN_VOX1: str = "/media/ssd/voice/datasets/vox1/"
-PATH_TRAIN_VOX2: str = "/media/ssd/voice/datasets/vox2/dev-16k/aac/"
-PATH_TRAIN_CN_CELEB: str = "/media/ssd/voice/datasets/cn-celeb_v2/CN-Celeb_wav-16k"
-PATH_TRAIN_LIBRI: str = "/media/ssd/voice/datasets/librispeech/"
+PATH_TRAIN_VOX1: str = f"{DIR_MAIN}/vox1/wav/dev/"
+PATH_TRAIN_VOX2: str = f"{DIR_MAIN}/vox2/dev-wav/aac/"
+PATH_TRAIN_CN_CELEB: str = f"{DIR_MAIN}/CN-Celeb_wav/data/"
+PATH_TRAIN_LIBRI: str = f"{DIR_MAIN}/librispeech/"
 
-PATH_TRAIN_SPGI: str = "/media/ssd/voice/datasets/spgispeech/"
-PATH_TRAIN_TIDY_1: str = "/media/ssd/voice/datasets/TidyVoiceX/"
-PATH_TRAIN_TIDY_2: str = "/media/ssd/voice/datasets/TidyVoiceX2/"
-PATH_TRAIN_VCTK: str = "/media/ssd/voice/datasets/vctk/"
+# PATH_TRAIN_SPGI: str = "/media/ssd/voice/datasets/spgispeech/"
+PATH_TRAIN_TIDY_1: str = f"{DIR_MAIN}/TidyVoice/TidyVoiceX_Train/"
+PATH_TRAIN_TIDY_2: str = f"{DIR_MAIN}/TidyVoice/TidyVoiceX2_ASV/"
+# PATH_TRAIN_VCTK: str = "/media/ssd/voice/datasets/vctk/"
 
-PATH_TRAIN_MCV13: str = "/media/ssd/voice/datasets/mcv13"
-PATH_TRAIN_VOXTUBE: str = "/media/ssd/voice/datasets/voxtube"
+# PATH_TRAIN_MCV13: str = "/media/ssd/voice/datasets/mcv13"
+# PATH_TRAIN_VOXTUBE: str = "/media/ssd/voice/datasets/voxtube"
 
 
-VAL_ROOT = "/media/ssd/voice/datasets/vox1/test/wav"
+VAL_ROOT = f"{DIR_MAIN}/vox1/wav/test"
 TRIALS_PATH = "data/test_vox/trials"
 
-DIR_RIR = Path("/media/ssd/voice/datasets/RIRs/RIRS_NOISES/")
-DIR_NOISE = Path("/media/ssd/voice/datasets/musan/")
+DIR_RIR = Path(f"{DIR_MAIN}/RIRs/RIRS_NOISES/")
+DIR_NOISE = Path(f"{DIR_MAIN}/musan/")
 
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "tel-emb-cosine-022"
+EXPERIMENT_NAME = "ecapa-tdnn-tel-emb-cosine-001"
 SAMPLE_RATE = 16_000
 
 
@@ -116,9 +118,37 @@ def get_teacher() -> nn.Module:
 #     return model
 
 
+# def get_student() -> nn.Module:
+#     cfg = read_yaml(STUDENT_CFG)
+#     model = ResNetTF(**cfg["model_args"])
+#     if STUDENT_CKPT is not None:
+#         model.load_state_dict(torch.load(STUDENT_CKPT))
+#     return model
+
+
 def get_student() -> nn.Module:
-    cfg = read_yaml(STUDENT_CFG)
-    model = ResNetTF(**cfg["model_args"])
+    # model = ECAPA2(
+    #     feat_type="tf_spec",
+    #     embed_dim=256,
+    #     spec_params={
+    #         "n_fft": 512,
+    #         "win_length": 400,
+    #         "hop_length": 160,
+    #         "pool_freqs": None,
+    #         "do_preemph": True,
+    #         "do_spec_aug": False
+    #     }
+    # )
+    model = ECAPA_TDNN_VAD(
+        channels=1024,
+        feat_type="tf",
+        embed_dim=256,
+    )
+    # model = ECAPA2(
+    #     feat_type="tf",
+    #     embed_dim=256
+    # )
+
     if STUDENT_CKPT is not None:
         model.load_state_dict(torch.load(STUDENT_CKPT))
     return model
@@ -223,9 +253,11 @@ class ValidationCallback(Callback):
         self,
         trainer: pl.Trainer,
         pl_module: DistillationLightningModule,
-        outputs: tp.Any,
-        batch: tp.Any,
-        batch_idx: int,
+        *args,
+        **kwargs
+        # outputs: tp.Any,
+        # batch: tp.Any,
+        # batch_idx: int,
     ) -> None:
         if self.validate_every_n_steps is not None:
             steps_since_last = trainer.global_step - self._last_val_step
@@ -275,16 +307,19 @@ def create_trainer(
 
 def main() -> None:
     # --- Models ---
-    head = get_head()
+    # head = get_head()
+    head = None
     model_teacher = HeadModelWrapper(
         model_base=get_teacher(),
         head=head,
+        is_dummy=not head,
         enable_grad=False,
         enable_train=False,
     )
     model_student = HeadModelWrapper(
         model_base=get_student(),
         head=head,
+        is_dummy=not head,
         enable_grad=True,
         enable_train=True,
     )
@@ -296,7 +331,7 @@ def main() -> None:
         segments_step_ms=4000,
         sample_rate=SAMPLE_RATE,
     )
-    reader_train = AudioReaderTelSimulated(norm_type="std", length_segment_ms=3000, sample_rate=16000, p_tel=0.8)
+    reader_train = AudioReaderTelSimulated(norm_type="std", length_segment_ms=4000, sample_rate=16000, p_tel=0.5)
     # reader_train = AudioReaderRandom(norm_type="std", length_segment_ms=3000)
 
     dataset_val = VoxDataset(reader=reader_val, root=VAL_ROOT)
@@ -312,11 +347,11 @@ def main() -> None:
                 weight=1.0,
                 name="vox2",
             ),
-            UnLabeledSource(
-                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_SPGI))],
-                weight=0.8,
-                name="spgi",
-            ),
+            # UnLabeledSource(
+            #     [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_SPGI))],
+            #     weight=0.8,
+            #     name="spgi",
+            # ),
             UnLabeledSource(
                 [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_CN_CELEB))],
                 weight=0.8,
@@ -332,21 +367,21 @@ def main() -> None:
                 weight=0.8,
                 name="tidy-2",
             ),
-            UnLabeledSource(
-                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VCTK))],
-                weight=0.8,
-                name="vctk",
-            ),
+            # UnLabeledSource(
+            #     [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_VCTK))],
+            #     weight=0.8,
+            #     name="vctk",
+            # ),
             UnLabeledSource(
                 [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_LIBRI))],
                 weight=0.8,
                 name="libri",
             ),
-            UnLabeledSource(
-                [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_MCV13))],
-                weight=0.8,
-                name="mcv13",
-            ),
+            # UnLabeledSource(
+            #     [WeightedDataset(dataset=VoxDataset(reader=reader_train, root=PATH_TRAIN_MCV13))],
+            #     weight=0.8,
+            #     name="mcv13",
+            # ),
         ]
     )
 

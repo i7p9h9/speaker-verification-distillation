@@ -1,5 +1,7 @@
+import contextlib
 import json
 import typing as tp
+import warnings
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -98,30 +100,57 @@ class HeadModelWrapper(nn.Module):
 
     By default, runs in inference mode with no gradients and both modules in eval mode.
     Training mode must be explicitly enabled with clear notification.
+
+    Dummy mode (head=None, dummy=True) skips classification entirely:
+    forward() returns ModelOutput with logits=None and embeddings from model_base.
     """
 
     def __init__(
         self,
         model_base: nn.Module,
-        head: HeadBase,
+        head: tp.Optional[HeadBase],
         enable_grad: bool = False,
         enable_train: bool = False,
+        is_dummy: bool = False,
     ):
         """
         Args:
             model_base: Base model that produces embeddings
-            head: Classification head (HeadBase subclass)
-            enable_grad: If True, enables gradient computation. 
+            head: Classification head (HeadBase subclass). Must be None if dummy=True.
+            enable_grad: If True, enables gradient computation.
                          WARNING: Must be explicitly set to True for training.
             enable_train: If True, sets both modules to train mode.
                           WARNING: Must be explicitly set to True for training.
+            dummy: If True, runs without a head (head must be None).
+                   forward() returns logits=None. Must be set explicitly.
         """
         super().__init__()
 
+        # Dummy mode must be requested explicitly and be consistent with head
+        if is_dummy and head is not None:
+            raise ValueError(
+                "[HeadModelWrapper] dummy=True requires head=None, "
+                f"but got head of type {type(head).__name__}."
+            )
+        if not is_dummy and head is None:
+            raise ValueError(
+                "[HeadModelWrapper] head is None but dummy=False. "
+                "Pass dummy=True explicitly to run without a classification head."
+            )
+
         self.model_base = model_base
         self.head = head
+        self._dummy = is_dummy
         self._grad_enabled = enable_grad
         self._train_enabled = enable_train
+
+        if is_dummy:
+            warnings.warn(
+                "[HeadModelWrapper] DUMMY mode is ENABLED: head is None, "
+                "forward() will return logits=None (embeddings only).",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Notify if training/grad is enabled
         if enable_grad:
@@ -142,10 +171,16 @@ class HeadModelWrapper(nn.Module):
         """Apply eval/train mode based on configuration."""
         if self._train_enabled:
             self.model_base.train()
-            self.head.train()
+            if self.head is not None:
+                self.head.train()
         else:
             self.model_base.eval()
-            self.head.eval()
+            if self.head is not None:
+                self.head.eval()
+
+    def _grad_context(self) -> tp.ContextManager:
+        """Return no_grad context unless gradients are explicitly enabled."""
+        return contextlib.nullcontext() if self._grad_enabled else torch.no_grad()
 
     def set_inference_mode(self) -> None:
         """Set wrapper to inference mode (no grad, eval)."""
@@ -178,15 +213,14 @@ class HeadModelWrapper(nn.Module):
             **kwargs: Keyword arguments passed to model_base
 
         Returns:
-            ModelOutput with logits and embeddings
+            ModelOutput with logits and embeddings.
+            In dummy mode logits is None.
         """
-        if self._grad_enabled:
+        with self._grad_context():
             embeddings = self.model_base(*args, **kwargs)
+            if self.head is None:
+                return ModelOutput(logits=None, embeddings=embeddings)
             return self.head(embeddings)
-        else:
-            with torch.no_grad():
-                embeddings = self.model_base(*args, **kwargs)
-                return self.head(embeddings)
 
     def train(self, mode: bool = True) -> "HeadModelWrapper":
         """
@@ -212,11 +246,13 @@ class HeadModelWrapper(nn.Module):
         Returns:
             Embeddings tensor from model_base
         """
-        if self._grad_enabled:
+        with self._grad_context():
             return self.model_base(*args, **kwargs)
-        else:
-            with torch.no_grad():
-                return self.model_base(*args, **kwargs)
+
+    @property
+    def is_dummy(self) -> bool:
+        """Check if wrapper runs without a classification head."""
+        return self._dummy
 
     @property
     def is_training_mode(self) -> bool:

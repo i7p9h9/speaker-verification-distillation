@@ -268,19 +268,20 @@ class ChannelDependentAttentiveStatisticsPooling(nn.Module):
         super().__init__()
         self.eps = eps
         self.attention = nn.Sequential(
-            nn.Conv1d(channels * 3, hidden_channels, 1),
+            nn.Conv1d(channels, hidden_channels, 1),
             nn.ReLU(),
             nn.BatchNorm1d(hidden_channels),
             nn.Conv1d(hidden_channels, channels, 1),
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        time = x.shape[-1]
-        mean = x.mean(dim=-1, keepdim=True).expand(-1, -1, time)
-        std = x.var(dim=-1, keepdim=True, unbiased=False).add(self.eps).sqrt()
-        std = std.expand(-1, -1, time)
+        # time = x.shape[-1]
+        # mean = x.mean(dim=-1, keepdim=True).expand(-1, -1, time)
+        # std = x.var(dim=-1, keepdim=True, unbiased=False).add(self.eps).sqrt()
+        # std = std.expand(-1, -1, time)
 
-        attention_logits = self.attention(torch.cat((x, mean, std), dim=1))
+        # attention_logits = self.attention(torch.cat((x, mean, std), dim=1))
+        attention_logits = self.attention(x)
         weights = attention_logits.softmax(dim=-1)
         attentive_mean = (weights * x).sum(dim=-1)
         second_moment = (weights * x.square()).sum(dim=-1)
