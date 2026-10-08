@@ -46,6 +46,7 @@ Container Toolkit. Репозиторий не копируется в обра�
 docker compose up --build -d
 docker compose exec dev uv sync --locked
 docker compose exec dev uv run python -c 'import torch; print(torch.cuda.get_device_name(0))'
+docker compose exec -w /workspace/formanta-distill/egs/voxceleb-v2 dev uv run python distill.py
 ```
 
 Если UID/GID пользователя отличаются от 1000, перед первой сборкой передайте их:

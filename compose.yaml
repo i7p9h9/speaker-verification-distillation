@@ -11,6 +11,8 @@ services:
     command: sleep infinity
     shm_size: 8gb
     gpus: all
+    mem_limit: 50g
+    memswap_limit: 50g
     environment:
       UV_PROJECT_ENVIRONMENT: /opt/venv
       UV_CACHE_DIR: /home/vscode/.cache/uv
