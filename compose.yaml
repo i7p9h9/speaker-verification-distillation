@@ -13,21 +13,14 @@ services:
     gpus: all
     mem_limit: 50g
     memswap_limit: 50g
-    environment:
-      UV_PROJECT_ENVIRONMENT: /opt/venv
-      UV_CACHE_DIR: /home/vscode/.cache/uv
-      UV_LINK_MODE: copy
     volumes:
       - type: bind
         source: .
         target: /workspace/formanta-distill
+      # venv, uv-managed Python and uv cache; survives container re-creation.
       - type: volume
-        source: uv-venv
-        target: /opt/venv
-      - type: volume
-        source: uv-cache
-        target: /home/vscode/.cache/uv
+        source: uv-data
+        target: /opt/uv
 
 volumes:
-  uv-venv:
-  uv-cache:
+  uv-data:

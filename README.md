@@ -37,8 +37,9 @@ Container Toolkit. Репозиторий не копируется в обра�
 каталог в `/workspace/formanta-distill`, поэтому все изменения файлов сразу
 остаются на хосте.
 
-Окружение uv и кэш хранятся отдельно в Docker volumes `uv-venv` и `uv-cache`.
-Они не создают локальную `.venv` и сохраняются между пересозданиями контейнера.
+venv, Python, установленный uv, и кэш uv хранятся в Docker volume `uv-data`
+(`/opt/uv`). Они не создают локальную `.venv` и сохраняются между пересозданиями
+контейнера.
 
 Запуск из корня репозитория:
 
@@ -49,12 +50,16 @@ docker compose exec dev uv run python -c 'import torch; print(torch.cuda.get_dev
 docker compose exec -w /workspace/formanta-distill/egs/voxceleb-v2 dev uv run python distill.py
 ```
 
-Если UID/GID пользователя отличаются от 1000, перед первой сборкой передайте их:
+Если UID/GID пользователя отличаются от 1000, перед первой сборкой запишите их
+в `.env` (Compose читает его сам, файл в `.gitignore`):
 
 ```bash
-USER_UID=$(id -u) USER_GID=$(id -g) docker compose build
-docker compose up -d
+printf 'USER_UID=%s\nUSER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+docker compose up --build -d
 ```
+
+Владелец volume задаётся при его создании. Если UID поменялся после первого
+запуска, пересоздайте volume: `docker compose down -v`.
 
 Для VS Code/Cursor достаточно выполнить `Dev Containers: Reopen in Container`.
 После создания контейнера `uv sync --locked` запускается автоматически.

@@ -14,7 +14,7 @@
         "ms-python.vscode-pylance"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "python.defaultInterpreterPath": "/opt/uv/venv/bin/python",
         "python.terminal.activateEnvironment": false
       }
     }
