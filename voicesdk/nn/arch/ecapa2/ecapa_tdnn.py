@@ -76,9 +76,7 @@ class ECAPA_TDNN_VAD(nn.Module):
         self.spec_dims = spec_dims
         self.num_frequencies = num_frequencies
 
-        self.layer1 = Conv1dReluBn(
-            spec_dims * num_frequencies, channels, kernel_size=5, padding=2
-        )
+        self.layer1 = Conv1dReluBn(spec_dims * num_frequencies, channels, kernel_size=5, padding=2)
         self.layer2 = SE_Res2Block(channels, kernel_size=3, stride=1, padding=2, dilation=2, scale=scale)
         self.layer3 = SE_Res2Block(channels, kernel_size=3, stride=1, padding=3, dilation=3, scale=scale)
         self.layer4 = SE_Res2Block(channels, kernel_size=3, stride=1, padding=4, dilation=4, scale=scale)
@@ -124,8 +122,8 @@ class ECAPA_TDNN_VAD(nn.Module):
         if not return_attention:
             return embedding
         vad_logits = channel_attention_logits.mean(dim=1)
-        return embedding
-        # return ECAPA2Output(embedding=embedding, attention=vad_logits)
+        # return embedding
+        return ECAPA2Output(embedding=embedding, attention=vad_logits)
 
     def extract_embedding(self, x: torch.Tensor) -> torch.Tensor:
         """Return only the utterance-level speaker embedding."""
