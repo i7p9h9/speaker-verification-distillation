@@ -6,7 +6,10 @@ Sections 4-5, applied to the ``.npz`` files written by ``extract.py``:
   1. VAD: hysteresis thresholding of the overlap-averaged frame logits ``v_t``
      (start above ``--onset``, stop below ``--offset``), then segments closer
      than ``--merge-gap`` are merged and segments shorter than ``--min-dur``
-     are removed.
+     are removed.  With ``--vad-lda`` the LDA speech score of the frame
+     features (``lda_vad.py``) is thresholded instead of ``v_t``.  With
+     ``--vad-silero`` the Silero VAD segments (``silero_vad.py``) are the speech,
+     with ``--vad-silero-prob`` its probabilities are thresholded as above.
   2. Windows without detected speech are discarded.
   3. Spectral clustering of the remaining window embeddings: cosine affinity,
      top-k pruning per row (k=10), normalized Laplacian, number of speakers
@@ -30,14 +33,23 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
-from rttm import Turn, read_rttm_dir, write_rttm
+
+try:
+    from lda_vad import apply_lda, load_lda
+    from rttm import Turn, read_rttm_dir, write_rttm
+    from silero_vad import SileroCache
+except ImportError:
+    from .lda_vad import apply_lda, load_lda
+    from .rttm import Turn, read_rttm_dir, write_rttm
+    from .silero_vad import SileroCache
+
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
 Segment = tp.Tuple[float, float]
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--npz-dir", type=Path, required=True)
     p.add_argument("--out-dir", type=Path, required=True, help="one <rel>.rttm per input .npz")
@@ -51,6 +63,23 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="keep windows with more detected speech than this, s",
+    )
+    p.add_argument(
+        "--vad-lda",
+        type=Path,
+        default=None,
+        help="LDA from lda_vad.py; threshold its score on the frame features instead of v_t",
+    )
+    p.add_argument(
+        "--vad-silero",
+        type=Path,
+        default=None,
+        help="silero_vad.py output dir; use its speech segments instead of v_t",
+    )
+    p.add_argument(
+        "--vad-silero-prob",
+        action="store_true",
+        help="with --vad-silero: threshold its probabilities with --onset/--offset/--merge-gap/--min-dur",
     )
     p.add_argument(
         "--oracle-vad-dir",
@@ -69,7 +98,11 @@ def parse_args() -> argparse.Namespace:
         help="reference RTTM dir; take the number of speakers from it",
     )
     p.add_argument("--seed", type=int, default=0)
-    return p.parse_args()
+    return p
+
+
+def parse_args() -> argparse.Namespace:
+    return build_parser().parse_args()
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +110,11 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 def hysteresis(scores: np.ndarray, onset: float, offset: float) -> np.ndarray:
     """Speech starts when ``score > onset`` and lasts while ``score >= offset``."""
+    if offset <= onset:
+        # every frame is an "on" event, an "off" event or keeps the last event's state
+        event = np.where(scores > onset, 1, np.where(scores < offset, 0, -1))
+        last = np.maximum.accumulate(np.where(event >= 0, np.arange(len(scores)), -1))
+        return (last >= 0) & (event[np.maximum(last, 0)] == 1)
     active = np.zeros(len(scores), dtype=bool)
     on = False
     for i, score in enumerate(scores):
@@ -163,6 +201,8 @@ def diarize(
     oracle_speech: tp.List[Segment] | None,
     num_speakers: int | None,
 ) -> tp.List[Turn]:
+    """``data``: the npz fields, with ``vad`` being the frame scores to threshold
+    (see :func:`frame_scores`); ``oracle_speech`` replaces the thresholding."""
     vad = data["vad"]
     shift = float(data["frame_shift"])
     if oracle_speech is None:
@@ -204,6 +244,37 @@ def diarize(
     return turns
 
 
+NPZ_KEYS = ("vad", "frame_shift", "window_starts", "window_ends", "embeddings")
+
+
+def frame_scores(
+    npz: tp.Mapping[str, np.ndarray],
+    file_id: str,
+    args: argparse.Namespace,
+    lda: tp.Mapping[str, np.ndarray] | None,
+    silero: SileroCache | None,
+) -> np.ndarray:
+    """Frame scores thresholded by the hysteresis: the model's ``v_t``, the LDA
+    score of the frame features or the Silero speech probability."""
+    if lda is not None:
+        if "frames" not in npz:
+            raise SystemExit(f"{file_id}: no frame features for --vad-lda, extract with --save-frames")
+        return apply_lda(npz["frames"], lda)
+    if silero is not None and args.vad_silero_prob:
+        return silero.frame_prob(file_id, len(npz["vad"]), float(npz["frame_shift"]))
+    return npz["vad"]
+
+
+def load_vad_sources(args: argparse.Namespace) -> tp.Tuple[dict | None, SileroCache | None]:
+    if args.vad_lda and args.vad_silero:
+        raise SystemExit("--vad-lda and --vad-silero are exclusive")
+    if args.vad_silero_prob and not args.vad_silero:
+        raise SystemExit("--vad-silero-prob needs --vad-silero")
+    lda = load_lda(args.vad_lda) if args.vad_lda else None
+    silero = SileroCache(args.vad_silero) if args.vad_silero else None
+    return lda, silero
+
+
 def main() -> None:
     args = parse_args()
     files = sorted(args.npz_dir.rglob("*.npz"))
@@ -212,6 +283,7 @@ def main() -> None:
 
     oracle_vad = read_rttm_dir(args.oracle_vad_dir) if args.oracle_vad_dir else None
     oracle_spk = read_rttm_dir(args.oracle_speakers_dir) if args.oracle_speakers_dir else None
+    lda, silero = load_vad_sources(args)
 
     for path in tqdm(files, desc="diarize"):
         file_id = path.stem
@@ -219,12 +291,16 @@ def main() -> None:
         if oracle_vad is not None:
             ref = oracle_vad.get(file_id, [])
             oracle_speech = merge_and_filter(sorted((s, e) for s, e, _ in ref), 0.0, 0.0)
+        elif silero is not None and not args.vad_silero_prob:
+            oracle_speech = silero.segments(file_id)
         num_speakers = args.num_speakers
         if oracle_spk is not None:
             num_speakers = len({spk for _, _, spk in oracle_spk.get(file_id, [])}) or None
 
-        with np.load(path) as data:
-            turns = diarize(data, args, oracle_speech, num_speakers)
+        with np.load(path) as npz:
+            data = {k: npz[k] for k in NPZ_KEYS}
+            data["vad"] = frame_scores(npz, file_id, args, lda, silero)
+        turns = diarize(data, args, oracle_speech, num_speakers)
         out_path = (args.out_dir / path.relative_to(args.npz_dir)).with_suffix(".rttm")
         write_rttm(out_path, file_id, turns)
 

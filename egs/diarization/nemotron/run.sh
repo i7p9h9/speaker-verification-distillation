@@ -6,10 +6,12 @@
 # Writes <out-dir>/<rel>.npz (speaker probabilities) and <rel>.json (segments);
 # convert them with to_rttm.py.  The image is built on first use; the model is
 # cached in $HF_CACHE (default ~/.cache/huggingface).  HF_TOKEN is passed through.
+# Directories that symlinks in <wav-dir> point to (e.g. <root>/prepared/<set>/wav
+# of prepare_data.py) are mounted read-only at the same paths.
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-    sed -n '2,8p' "$0"
+    sed -n '2,10p' "$0"
     exit 1
 fi
 
@@ -28,6 +30,11 @@ fi
 
 mkdir -p "$OUT_DIR" "$HF_CACHE"
 
+LINK_MOUNTS=()
+while IFS= read -r dir; do
+    LINK_MOUNTS+=(-v "$dir:$dir:ro")
+done < <(find "$IN_DIR" -type l -exec readlink -f {} + | xargs -r -d '\n' dirname | sort -u)
+
 docker run --rm \
     --gpus "$GPUS" \
     --user "$(id -u):$(id -g)" \
@@ -37,5 +44,6 @@ docker run --rm \
     -v "$HF_CACHE":/hf-cache \
     -v "$HERE/infer.py":/app/infer.py:ro \
     -v "$IN_DIR":/data/in:ro \
+    "${LINK_MOUNTS[@]}" \
     -v "$OUT_DIR":/data/out \
     "$IMAGE" --in-dir /data/in --out-dir /data/out "$@"

@@ -1,0 +1,12 @@
+# key	name	root	rate	sets	tune_set
+ami	AMI	AMI_test_16k/AMI_test_16k	16000	*	test
+callhome	Callhome	Callhome/Callhome	8000	*	all
+callhome2	Callhome2	Callhome_v2/Callhome_v2	8000	part1,part2	part1
+voxconverse	VoxConverse	voxconverse/voxconverse	16000	*	test
+voxconverse8k	VoxConverse8k	VoxConverse/VoxConverse	8000	*	test
+aishell4	AISHELL4	aishell4_test/aishell4_test	16000	test	test
+alimeeting	AliMeeting	Alimeeting/Alimeeting	16000	*	test
+msdwild	MSDWild	msdwild/msdwild	16000	few_val	few_val
+icsi	ICSI	ICSI/ICSI	8000	*	all
+robusta	Robusta	Robusta/Robusta	8000	*	all
+switchboard	Switchboard	Switchboard/Switchboard	8000	*	all

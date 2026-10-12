@@ -77,7 +77,7 @@ DIR_RIR = Path(f"{DIR_MAIN}/RIRs/RIRS_NOISES/")
 DIR_NOISE = Path(f"{DIR_MAIN}/musan/")
 
 LOG_DIR = "data/exps/"
-EXPERIMENT_NAME = "ecapa-tdnn-tel-emb-cosine-001"
+EXPERIMENT_NAME = "ecapa-tdnn-mic-emb-cosine-001"
 SAMPLE_RATE = 16_000
 
 
@@ -254,7 +254,7 @@ class ValidationCallback(Callback):
         trainer: pl.Trainer,
         pl_module: DistillationLightningModule,
         *args,
-        **kwargs
+        **kwargs,
         # outputs: tp.Any,
         # batch: tp.Any,
         # batch_idx: int,

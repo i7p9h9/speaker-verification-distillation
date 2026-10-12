@@ -12,12 +12,18 @@ scored: a frame with N_ref reference and N_sys hypothesis speakers contributes
 is the total width, i.e. ``2c``).  Without UEM the scored region is
 ``[0, max(end of reference, end of hypothesis)]``.
 
+VAD metrics compare the speech regions of any speaker: VAD_MS and VAD_FA are
+missed and falsely detected speech in % of reference speech (same collars),
+VAD is their sum.
+
 Files are matched by the RTTM file id.  Totals are computed over the summed
 durations of all files, not by averaging per-file DER.
 
 Usage:
     python egs/diarization/ecapa/score_der.py --ref-dir data/ref --hyp-dir data/rttm \
-        --collars 0 0.25 [--skip-overlap] [--csv der.csv]
+        --collars 0 0.25 [--skip-overlap] [--ignore-missing] [--csv der.csv] [--detailed]
+
+Prints the totals per collar; ``--detailed`` also the per-file table.
 """
 
 from __future__ import annotations
@@ -30,41 +36,63 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from rttm import Turn, read_rttm_dir
+
+try:
+    from rttm import Turn, read_rttm_dir
+except ImportError:
+    from .rttm import Turn, read_rttm_dir
 from scipy.optimize import linear_sum_assignment
 
 
 @dataclass
 class Score:
-    total: float = 0.0
+    total: float = 0.0  # reference speaker time (overlap counted per speaker)
     miss: float = 0.0
     fa: float = 0.0
     conf: float = 0.0
+    speech: float = 0.0  # reference speech time (any speaker)
+    vad_miss: float = 0.0
+    vad_fa: float = 0.0
 
     def __iadd__(self, other: "Score") -> "Score":
-        self.total += other.total
-        self.miss += other.miss
-        self.fa += other.fa
-        self.conf += other.conf
+        for name in self.__dataclass_fields__:
+            setattr(self, name, getattr(self, name) + getattr(other, name))
         return self
 
     def rate(self, value: float) -> float:
         return 100.0 * value / self.total if self.total > 0 else float("nan")
 
+    def vad_rate(self, value: float) -> float:
+        return 100.0 * value / self.speech if self.speech > 0 else float("nan")
+
     @property
     def der(self) -> float:
         return self.rate(self.miss + self.fa + self.conf)
 
+    def row(self) -> tp.List[str]:
+        values = [self.der, self.rate(self.miss), self.rate(self.fa), self.rate(self.conf)]
+        values += [self.vad_rate(self.vad_miss + self.vad_fa), self.vad_rate(self.vad_miss), self.vad_rate(self.vad_fa)]
+        return [f"{v:.2f}" for v in values]
 
-def parse_args() -> argparse.Namespace:
+
+COLUMNS = ["DER", "MS", "FA", "SC", "VAD", "VAD_MS", "VAD_FA"]
+
+
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ref-dir", type=Path, required=True)
     p.add_argument("--hyp-dir", type=Path, required=True)
     p.add_argument("--collars", type=float, nargs="+", default=[0.0, 0.25], help="seconds, +- around boundaries")
     p.add_argument("--skip-overlap", action="store_true", help="exclude reference overlap regions from scoring")
     p.add_argument("--resolution", type=float, default=0.01, help="frame step, seconds")
+    p.add_argument(
+        "--ignore-missing",
+        action="store_true",
+        help="score only reference files that have a hypothesis RTTM (file id or file name)",
+    )
     p.add_argument("--csv", type=Path, default=None, help="also write the table as csv")
-    return p.parse_args()
+    p.add_argument("--detailed", action="store_true", help="print the per-file table, not only the totals")
+    return p
 
 
 def to_activity(turns: tp.List[Turn], num_frames: int, step: float) -> np.ndarray:
@@ -109,51 +137,88 @@ def score_file(
         rows, cols = linear_sum_assignment(-overlap)
         correct = int(overlap[rows, cols].sum())
 
+    ref_speech, hyp_speech = n_ref > 0, n_hyp > 0
     return Score(
         total=float(n_ref.sum()) * step,
         miss=float(np.maximum(n_ref - n_hyp, 0).sum()) * step,
         fa=float(np.maximum(n_hyp - n_ref, 0).sum()) * step,
         conf=float(np.minimum(n_ref, n_hyp).sum() - correct) * step,
+        speech=float(ref_speech.sum()) * step,
+        vad_miss=float((ref_speech & ~hyp_speech).sum()) * step,
+        vad_fa=float((hyp_speech & ~ref_speech).sum()) * step,
     )
 
 
-def main() -> None:
-    args = parse_args()
-    refs = read_rttm_dir(args.ref_dir)
-    hyps = read_rttm_dir(args.hyp_dir)
+def score_dirs(
+    ref_dir: Path,
+    hyp_dir: Path,
+    collars: tp.Sequence[float] = (0.0, 0.25),
+    skip_overlap: bool = False,
+    resolution: float = 0.01,
+    ignore_missing: bool = False,
+) -> tp.Tuple[tp.List[str], tp.List[tp.List[str]]]:
+    """``(header, rows)`` with one row per reference file and a final ``*TOTAL*`` row.
+
+    Per collar: DER and its parts (in % of reference speaker time) and the
+    speech / non-speech error VAD = VAD_MS + VAD_FA (in % of reference speech).
+    """
+    refs = read_rttm_dir(ref_dir)
+    hyps = read_rttm_dir(hyp_dir)
     if not refs:
-        raise SystemExit(f"no reference RTTMs in {args.ref_dir}")
+        raise SystemExit(f"no reference RTTMs in {ref_dir}")
+    if ignore_missing:
+        # an RTTM of a file without detected speech has no lines, so match by file name too
+        present = set(hyps) | {path.stem for path in Path(hyp_dir).rglob("*.rttm")}
+        refs = {file_id: turns for file_id, turns in refs.items() if file_id in present}
+        if not refs:
+            raise SystemExit(f"no reference file of {ref_dir} has a hypothesis in {hyp_dir}")
 
     missing = sorted(set(refs) - set(hyps))
     extra = sorted(set(hyps) - set(refs))
-    if missing:
+    if missing and not ignore_missing:
         print(f"warning: {len(missing)} reference files without hypothesis (scored as missed)", file=sys.stderr)
     if extra:
         print(f"warning: {len(extra)} hypothesis files without reference (ignored)", file=sys.stderr)
 
-    header = ["file"]
-    for c in args.collars:
-        header += [f"DER[collar={c:g}]", f"MS[collar={c:g}]", f"FA[collar={c:g}]", f"SC[collar={c:g}]"]
+    header = ["file"] + [f"{name}[collar={c:g}]" for c in collars for name in COLUMNS]
     rows: tp.List[tp.List[str]] = []
-    totals = {c: Score() for c in args.collars}
+    totals = {c: Score() for c in collars}
     for file_id in sorted(refs):
         row = [file_id]
-        for c in args.collars:
-            score = score_file(refs[file_id], hyps.get(file_id, []), c, args.skip_overlap, args.resolution)
+        for c in collars:
+            score = score_file(refs[file_id], hyps.get(file_id, []), c, skip_overlap, resolution)
             totals[c] += score
-            row += [f"{score.der:.2f}", f"{score.rate(score.miss):.2f}", f"{score.rate(score.fa):.2f}"]
-            row += [f"{score.rate(score.conf):.2f}"]
+            row += score.row()
         rows.append(row)
-    total_row = ["*TOTAL*"]
-    for c in args.collars:
-        s = totals[c]
-        total_row += [f"{s.der:.2f}", f"{s.rate(s.miss):.2f}", f"{s.rate(s.fa):.2f}", f"{s.rate(s.conf):.2f}"]
-    rows.append(total_row)
+    rows.append(["*TOTAL*"] + [v for c in collars for v in totals[c].row()])
+    return header, rows
 
+
+def format_table(header: tp.List[str], rows: tp.List[tp.List[str]]) -> str:
     widths = [max(len(r[i]) for r in [header] + rows) for i in range(len(header))]
-    for r in [header] + rows:
-        print("  ".join(v.ljust(w) if i == 0 else v.rjust(w) for i, (v, w) in enumerate(zip(r, widths))))
+    return "\n".join(
+        "  ".join(v.ljust(w) if i == 0 else v.rjust(w) for i, (v, w) in enumerate(zip(r, widths)))
+        for r in [header] + rows
+    )
 
+
+def summary(header: tp.List[str], rows: tp.List[tp.List[str]], collars: tp.Sequence[float]) -> str:
+    """The ``*TOTAL*`` row of :func:`score_dirs` as one line per collar."""
+    total = dict(zip(header, rows[-1]))
+    files = str(len(rows) - 1)
+    table = [[f"{c:g}", files, *[total[f"{n}[collar={c:g}]"] for n in COLUMNS]] for c in collars]
+    return format_table(["collar", "files", *COLUMNS], table)
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    header, rows = score_dirs(
+        args.ref_dir, args.hyp_dir, args.collars, args.skip_overlap, args.resolution, args.ignore_missing
+    )
+    if args.detailed:
+        print(format_table(header, rows))
+        print()
+    print(summary(header, rows, args.collars) + ("  (overlap skipped)" if args.skip_overlap else ""))
     if args.csv is not None:
         with open(args.csv, "w", newline="") as f:
             csv.writer(f).writerows([header] + rows)
