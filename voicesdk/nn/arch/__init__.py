@@ -6,6 +6,7 @@ from .redimnet import ReDimNet, ReDimNetWrap
 from .resnet import ResNet34, ResNet50
 from .ResNetSE import ResNetSE34, ResNetSE50, ResNetSE100
 from .resnettf import ResNetTF, ResNetTFSubNetS
+from .streaming_transformer import RoPESpeaker, StreamingSpeakerEncoder, StreamingSpeakerOutput, TSCOSpeaker
 from .tiny_vad import TorchSileroVAD
 
 __all__ = [
@@ -25,4 +26,8 @@ __all__ = [
     "ECAPA2",
     "ECAPA2Output",
     "TorchSileroVAD",
+    "RoPESpeaker",
+    "TSCOSpeaker",
+    "StreamingSpeakerEncoder",
+    "StreamingSpeakerOutput",
 ]
