@@ -8,7 +8,7 @@ the Silero cache, no x-vectors.  (The VAD changes the x-vectors, so tuning it
 by DER would need an extraction per trial.)
 
     python egs/diarization/vbx/tune.py --target vad --silero-dir EXP/VoxConverse/dev/silero \
-        --ref-dir /media/raid/voice/VoxConverse/voxconverse/dev
+        --ref-dir DATA/voxconverse/prepared/dev/rttm
 
 ``--target vbx``: the clustering parameters of ``diarize.py`` (``--params``,
 default ``threshold,Fa,Fb,loopP,init_smoothing``) on the x-vectors of an
@@ -16,7 +16,7 @@ default ``threshold,Fa,Fb,loopP,init_smoothing``) on the x-vectors of an
 dendrogram of each file is built once, a trial cuts it and runs the VB-HMM.
 
     python egs/diarization/vbx/tune.py --target vbx --xvec-dir EXP/VoxConverse/dev/xvec-1234abcd \
-        --ref-dir /media/raid/voice/VoxConverse/voxconverse/dev --model resnet101-16k
+        --ref-dir DATA/voxconverse/prepared/dev/rttm --model resnet101-16k
 
 The first trial is the starting point given by the usual options (``--onset
 ..`` for vad, ``--threshold --Fa ..`` for vbx, otherwise their defaults);

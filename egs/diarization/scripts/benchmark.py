@@ -22,7 +22,9 @@ ones for all.  ecapa and vbx run through ``<recipe>/scripts/run-<key>.sh``
 with and without (--skip-overlap) the overlap regions.  The ecapa extraction
 does not depend on the VAD, so the second variant only re-diarizes.
 
-Logs go to <bench>/logs/; a failed run stops the benchmark unless
+The bench dir, the datasets' location and the models (paths of the ecapa
+checkpoints) are in ``../config.yaml`` (``benchmark``, ``data_dir``).  Logs go
+to <bench>/logs/; a failed run stops the benchmark unless
 --skip-failed.  ``aggregate.py`` puts the results into tables.  Typical order:
 
     benchmark.py nemotron
@@ -36,7 +38,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import subprocess
 import sys
 import time
@@ -48,27 +49,24 @@ DIAR_DIR = TOOLS_DIR.parent
 sys.path.insert(0, str(DIAR_DIR))
 sys.path.insert(0, str(TOOLS_DIR))
 
+import diar_config  # noqa: E402
 import prepare_data  # noqa: E402
 
-DATA_DIR = Path(os.environ.get("DIAR_DATA_DIR", "/media/raid/diarization/data"))
-BENCH_DIR = Path("/media/raid/diarization/results/bench")
 STAGES = ("nemotron", "silero", "tune", "average", "ecapa", "vbx")
 VAD_PARAMS = ("onset", "offset", "merge_gap", "min_dur")
 
-ECAPA_MODELS: tp.Dict[str, tp.List[str]] = {
-    "ecapa-tdnn-003": [
-        "--arch", "ECAPA_TDNN_VAD",
-        "--ckpt", "/media/raid/diarization/exps/ecapa-tdnn-003/last.ckpt",
-        "--batch-size", "32",
-    ],
-    "resnettf-teacher-vox4": [
-        "--arch", "ResNetTF",
-        "--config", "/media/data2/Projects/formanta-distill/egs/voxceleb-v2/data/cfg-models/rn100_v016_flr_vox4_v2.yaml",
-        "--ckpt", "/media/data2/Projects/formanta-distill/egs/voxceleb-v2/data/ckpt/rn100_v016_flr_vox4_v2/model.pt",
-        "--batch-size", "32",
-    ],
-}  # fmt: skip
-VBX_MODELS = ("resnet101-8k", "resnet101-16k", "redimnet", "redimnet-tel", "redimnet-tel-small")
+
+
+def ecapa_models() -> tp.Dict[str, tp.List[str]]:
+    """``benchmark.ecapa_models`` of the config as extract.py options."""
+    out = {}
+    for name, cfg in diar_config.get("benchmark.ecapa_models").items():
+        argv = ["--arch", cfg["arch"]]
+        for key in ("config", "ckpt"):
+            if cfg.get(key):
+                argv += [f"--{key}", str(diar_config.resolve(cfg[key]))]
+        out[name] = argv + [str(a) for a in cfg.get("args", [])]
+    return out
 
 
 class Dataset(tp.NamedTuple):
@@ -99,19 +97,20 @@ def read_datasets() -> tp.Dict[str, Dataset]:
     for line in (TOOLS_DIR / "datasets.tsv").read_text().splitlines():
         if line.strip() and not line.startswith("#"):
             key, name, root, rate, sets, tune_set = line.split("\t")
-            out[key] = Dataset(key, name, DATA_DIR / root, int(rate), sets, tune_set)
+            out[key] = Dataset(key, name, diar_config.get_path("data_dir") / root, int(rate), sets, tune_set)
     return out
 
 
 def parse_args() -> argparse.Namespace:
     datasets = read_datasets()
+    ecapa, vbx = ecapa_models(), diar_config.get("benchmark.vbx_models")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("stages", nargs="+", choices=STAGES)
-    p.add_argument("--bench-dir", type=Path, default=BENCH_DIR)
+    p.add_argument("--bench-dir", type=Path, default=None, help="default: benchmark.dir of the config")
     p.add_argument("--datasets", default=",".join(datasets), help="keys of datasets.tsv")
     p.add_argument("--vad", choices=["tuned", "average"], default="tuned", help="ecapa, vbx: Silero thresholds")
-    p.add_argument("--ecapa-models", default=",".join(ECAPA_MODELS))
-    p.add_argument("--vbx-models", default=",".join(VBX_MODELS))
+    p.add_argument("--ecapa-models", default=",".join(ecapa), help="subset of benchmark.ecapa_models")
+    p.add_argument("--vbx-models", default=",".join(vbx), help="subset of benchmark.vbx_models")
     p.add_argument("--tune-fraction", type=float, default=1.0)
     p.add_argument("--tune-trials", type=int, default=200)
     p.add_argument("--force", action="store_true", help="tune again; re-run up-to-date pipeline stages")
@@ -124,10 +123,10 @@ def parse_args() -> argparse.Namespace:
     args.datasets = [datasets[k] for k in keys]
     args.ecapa_models = [m for m in args.ecapa_models.split(",") if m]
     args.vbx_models = [m for m in args.vbx_models.split(",") if m]
-    if unknown := set(args.ecapa_models) - set(ECAPA_MODELS):
-        p.error(f"unknown ecapa models {sorted(unknown)} ({','.join(ECAPA_MODELS)})")
-    if unknown := set(args.vbx_models) - set(VBX_MODELS):
-        p.error(f"unknown vbx models {sorted(unknown)} ({','.join(VBX_MODELS)})")
+    if unknown := set(args.ecapa_models) - set(ecapa):
+        p.error(f"unknown ecapa models {sorted(unknown)} ({','.join(ecapa)})")
+    args.ecapa_args = ecapa
+    args.bench_dir = args.bench_dir or diar_config.get_path("benchmark.dir")
     return args
 
 
@@ -276,7 +275,7 @@ def vad_options(args: argparse.Namespace, ds: Dataset) -> tp.List[str]:
 def stage_recipe(recipe: str, args: argparse.Namespace) -> None:
     models = args.ecapa_models if recipe == "ecapa" else args.vbx_models
     for model in models:
-        model_args = ECAPA_MODELS[model] + ["--silero"] if recipe == "ecapa" else ["--model", model]
+        model_args = args.ecapa_args[model] + ["--silero"] if recipe == "ecapa" else ["--model", model]
         for ds in args.datasets:
             script = DIAR_DIR / recipe / "scripts" / f"run-{ds.key}.sh"
             common = ["--exp-dir", str(args.bench_dir / recipe / model), "--silero-root", str(args.bench_dir / "silero"),

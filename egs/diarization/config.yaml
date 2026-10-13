@@ -1,0 +1,27 @@
+# Machine-specific paths of the diarization recipes (egs/diarization), read by
+# diar_config.py.  Another file: DIAR_CONFIG=/path/to/config.yaml.  Relative
+# paths are relative to this file's directory, ~ is expanded.
+
+# datasets, the roots of scripts/datasets.tsv are under it (scripts/prepare_data.py
+# writes <root>/prepared there)
+data_dir: /media/raid/diarization/data
+
+# VBx reference models (ResNet101_8kHz, ResNet101_16kHz, redimnet*, see vbx/models.py)
+vbx_models: /media/data2/Projects/VBx/VBx/models
+
+# scripts/benchmark.py, scripts/aggregate.py
+benchmark:
+  dir: /media/raid/diarization/results/bench
+  # name -> extract.py options; ckpt and config are paths
+  ecapa_models:
+    ecapa-tdnn-003:
+      arch: ECAPA_TDNN_VAD
+      ckpt: /media/raid/diarization/exps/ecapa-tdnn-003/last.ckpt
+      args: [--batch-size, "32"]
+    resnettf-teacher-vox4:
+      arch: ResNetTF
+      config: ../voxceleb-v2/data/cfg-models/rn100_v016_flr_vox4_v2.yaml
+      ckpt: ../voxceleb-v2/data/ckpt/rn100_v016_flr_vox4_v2/model.pt
+      args: [--batch-size, "32"]
+  # presets of vbx/models.py
+  vbx_models: [resnet101-8k, resnet101-16k, redimnet, redimnet-tel, redimnet-tel-small]

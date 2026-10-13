@@ -1,6 +1,7 @@
-"""x-vector extractor presets of the VBx reference (/media/data2/Projects/VBx).
+"""x-vector extractor presets of the VBx reference (github.com/BUTSpeechFIT/VBx).
 
-Paths are relative to ``$VBX_MODELS`` (default: the reference's ``VBx/models``).
+Paths are relative to ``vbx_models`` of ``../config.yaml`` (the reference's
+``VBx/models`` with the added models).
 ``frontend``: ``fbank`` - 64 log Mel bands, windows of ``seg_len`` frames
 every ``seg_jump`` frames (``extract_xvectors_melbank``); ``pcm`` - raw audio
 windows of the model's input size every 0.24 s, normalized per window
@@ -11,11 +12,12 @@ one of the reference runs (``run-test.sh``).
 
 from __future__ import annotations
 
-import os
+import sys
 import typing as tp
 from pathlib import Path
 
-MODELS_ROOT = Path(os.environ.get("VBX_MODELS", "/media/data2/Projects/VBx/VBx/models"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import diar_config  # noqa: E402
 
 PRESETS: tp.Dict[str, tp.Dict[str, tp.Any]] = {
     "resnet101-8k": dict(
@@ -68,5 +70,5 @@ def preset(name: str) -> tp.Dict[str, tp.Any]:
     out = dict(PRESETS[name])
     for key in ("weights", "plda", "xvec_transform"):
         if out[key] is not None:
-            out[key] = MODELS_ROOT / out[key]
+            out[key] = diar_config.get_path("vbx_models") / out[key]
     return out

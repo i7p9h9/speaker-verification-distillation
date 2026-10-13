@@ -17,10 +17,11 @@
 # Stages whose parameters did not change are skipped (checkpoints are compared
 # by md5); see pipeline.py.
 #
-# Datasets (run-<key>.sh; default --root under $DIAR_DATA_DIR, /media/raid/diarization/data):
+# Datasets (run-<key>.sh; default --root under data_dir of
+#   ../../config.yaml):
 #   ami (AMI Mix-Headset, 16k: test), callhome (8k: all), callhome2 (Callhome_v2 with the
 #   Kaldi key, 8k: part1, part2, all), voxconverse (16k: test; dev too with the original
-#   layout, e.g. --root /media/raid/voice/VoxConverse), voxconverse8k (8k: test),
+#   layout, --root <voxconverse>), voxconverse8k (8k: test),
 #   aishell4 (channel 0, 16k: test), alimeeting (channel 0, 16k: test), msdwild (16k: few_val),
 #   icsi, robusta, switchboard (8k: all); default sets: callhome2 part1,part2, aishell4 test,
 #   msdwild few_val, others all their sets.  The first run prepares the dataset in

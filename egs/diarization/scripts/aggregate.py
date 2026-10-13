@@ -22,9 +22,11 @@ import typing as tp
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS_DIR.parent))
 sys.path.insert(0, str(TOOLS_DIR))
 
-from benchmark import BENCH_DIR, read_datasets  # noqa: E402
+import diar_config  # noqa: E402
+from benchmark import read_datasets  # noqa: E402
 
 METRICS = ("DER", "MS", "FA", "SC", "VAD", "VAD_MS", "VAD_FA")
 RECIPE_ORDER = {"nemotron": 0, "ecapa": 1, "vbx": 2}
@@ -35,7 +37,7 @@ Key = tp.Tuple[str, str, str, str, str]  # system, variant, dataset, set, scorin
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--bench-dir", type=Path, default=BENCH_DIR)
+    p.add_argument("--bench-dir", type=Path, default=None, help="default: benchmark.dir of the config")
     p.add_argument("--metric", choices=METRICS, default="DER")
     p.add_argument("--collar", type=float, default=0.25)
     p.add_argument("--out-dir", type=Path, default=None)
@@ -104,6 +106,7 @@ def format_table(rows: tp.List[tp.List[str]]) -> str:
 
 def main() -> None:
     args = parse_args()
+    args.bench_dir = args.bench_dir or diar_config.get_path("benchmark.dir")
     column = f"{args.metric}[collar={args.collar:g}]"
     values = collect(args.bench_dir, column)
     if not values:

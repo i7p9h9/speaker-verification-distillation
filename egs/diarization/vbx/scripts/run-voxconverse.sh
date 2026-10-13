@@ -5,7 +5,7 @@
 #   run-voxconverse.sh --exp-dir DIR [--sets A,B] [--root DIR] [options]
 #
 # e.g.
-#   run-voxconverse.sh --exp-dir /media/raid/diarization/results/vbx/exp-001 --model redimnet \
+#   run-voxconverse.sh --exp-dir EXP --model redimnet \
 #       --vad-silero-prob --onset 0.99 --offset 0.67 --merge-gap 0.8 --min-dur 0
 
 source "$(dirname "$0")/common.sh"

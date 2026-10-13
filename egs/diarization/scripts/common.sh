@@ -13,7 +13,6 @@ set -euo pipefail
 
 TOOLS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(cd "$TOOLS_DIR/../../.." && pwd)
-DATA_DIR=${DIAR_DATA_DIR:-/media/raid/diarization/data}
 
 # scripts/datasets.tsv: key, results name, root under DATA_DIR, sample rate,
 # default sets (* = all prepared ones), the set to tune on (benchmark.py)
@@ -31,6 +30,9 @@ usage() {
 }
 
 py() { uv run --project "$REPO_DIR" python "$@"; }
+
+# datasets: data_dir of ../config.yaml (or $DIAR_CONFIG)
+DATA_DIR=$(py "$TOOLS_DIR/../diar_config.py" data_dir)
 
 # parse_args DEFAULT_SETS DEFAULT_ROOT "$@"  ->  SETS (array), ROOT, ARGS (array, the rest)
 parse_args() {

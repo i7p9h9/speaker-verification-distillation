@@ -19,7 +19,7 @@ well the subset result transfers.
 
 Usage:
     python egs/diarization/ecapa/tune_vad.py --npz-dir exp/VoxConverse/dev/npz \
-        --ref-dir /media/raid/voice/VoxConverse/voxconverse/dev \
+        --ref-dir DATA/voxconverse/prepared/dev/rttm \
         --onset 1.5 --offset 0 --merge-gap 0.1 --min-dur 0.5 [--n-trials 200] [--eval-all]
 """
 
