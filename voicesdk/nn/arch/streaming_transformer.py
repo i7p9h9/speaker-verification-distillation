@@ -9,8 +9,9 @@ Two encoders over acoustic frames, both causal so they can run chunk by chunk
   validated reproduction of the original.
 
 :class:`StreamingSpeakerEncoder` puts a frontend (as in :class:`ECAPA_TDNN_VAD`)
-and a linear projection in front and averages the encoder frames into one
-utterance embedding, for pretraining on verification.  The speaker-slot memory
+and a causal convolutional stem in front and pools the encoder frames into one
+utterance embedding (mean and std, BatchNorm, linear: the ECAPA head), for
+pretraining on verification.  The speaker-slot memory
 for diarization is meant to be added on top of a pretrained model, so it is not
 here; ``return_frames=True`` gives the frame outputs it needs.
 
@@ -59,6 +60,25 @@ PRESETS: dict[str, dict[str, dict[str, int]]] = {
         "s4": dict(d_model=1280, n_heads=20, n_layers=11),
     },
 }
+
+
+class CausalConvStem(nn.Module):
+    """Two causal k=3 convolutions (GELU) from the features to ``d_model``; the
+    first one subsamples the frames by ``stride``.  Gives the transformer local
+    spectro-temporal patterns instead of single 10 ms frames."""
+
+    def __init__(self, in_dim: int, d_model: int, stride: int = 1):
+        super().__init__()
+        self.stride = stride
+        self.conv1 = nn.Conv1d(in_dim, d_model, 3, stride=stride)
+        self.conv2 = nn.Conv1d(d_model, d_model, 3)
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [B,T,F] -> [B,T/stride,D]
+        y = F.gelu(self.conv1(F.pad(x.transpose(1, 2), (2, 0))))
+        y = F.gelu(self.conv2(F.pad(y, (2, 0))))
+        return self.norm(y.transpose(1, 2))
 
 
 class StreamingSpeakerOutput(tp.NamedTuple):
@@ -222,17 +242,25 @@ class TSCOEncoder(nn.Module):
 
 
 class StreamingSpeakerEncoder(nn.Module):
-    """Frontend -> linear projection -> causal encoder -> mean -> embedding.
+    """Frontend -> stem -> causal encoder -> pooling -> BatchNorm -> embedding.
 
     The frontend follows :class:`ECAPA_TDNN_VAD`: ``feat_type`` selects one
     from :mod:`voicesdk.nn.feat` (``use_feats=False`` or ``feat_type=None``
     takes precomputed ``(B, F, T)`` / ``(B, C, F, T)`` features); multi-channel
     outputs are flattened into the input dimension.
 
+    ``stem="conv"`` is :class:`CausalConvStem` (``subsampling`` divides the frame
+    rate), ``"linear"`` a per-frame projection.  ``pooling="stats"`` takes the
+    mean and std of the frames, ``"mean"`` the mean only.  The BatchNorm after
+    the pooling removes the component shared by all utterances: without it the
+    mean of the (LayerNorm-ed) frames is nearly the same vector for every input
+    and the embedding collapses (pairwise cosine ~0.6-0.8 at init vs ~0 here).
+
     ``forward`` returns the embedding ``(B, embed_dim)``, the usual backbone
     interface; ``return_frames=True`` returns :class:`StreamingSpeakerOutput`.
-    ``offset`` is the absolute index of the first frame (RoPE), for running on
-    consecutive chunks; attention does not reach across chunks.
+    ``offset`` is the absolute index of the first (encoder) frame (RoPE), for
+    running on consecutive chunks; attention and the stem do not reach across
+    chunks.
     """
 
     def __init__(
@@ -247,6 +275,9 @@ class StreamingSpeakerEncoder(nn.Module):
         feat_type: str | None = "pt",
         spec_params: dict | None = None,
         use_feats: bool = True,
+        stem: tp.Literal["conv", "linear"] = "conv",
+        subsampling: int = 1,
+        pooling: tp.Literal["stats", "mean"] = "stats",
     ) -> None:
         super().__init__()
         spec_params = {} if spec_params is None else dict(spec_params)
@@ -276,9 +307,22 @@ class StreamingSpeakerEncoder(nn.Module):
         self.d_model = d_model
         self.embedding_dim = embed_dim
 
-        self.input_proj = nn.Linear(spec_dims * num_frequencies, d_model)
+        in_dim = spec_dims * num_frequencies
+        if stem == "conv":
+            self.input_proj: nn.Module = CausalConvStem(in_dim, d_model, subsampling)
+        elif stem == "linear":
+            if subsampling != 1:
+                raise ValueError("subsampling needs stem='conv'")
+            self.input_proj = nn.Linear(in_dim, d_model)
+        else:
+            raise ValueError(f"unsupported stem: {stem!r}")
         self.encoder = encoder
-        self.embedding = nn.Linear(d_model, embed_dim)
+        if pooling not in ("stats", "mean"):
+            raise ValueError(f"unsupported pooling: {pooling!r}")
+        self.pooling = pooling
+        pooled_dim = d_model * (2 if pooling == "stats" else 1)
+        self.pool_norm = nn.BatchNorm1d(pooled_dim)
+        self.embedding = nn.Linear(pooled_dim, embed_dim)
         self.apply(_init_weights)
 
     def _prepare_input(self, x: Tensor) -> Tensor:
@@ -302,7 +346,10 @@ class StreamingSpeakerEncoder(nn.Module):
         return_frames: bool = False,
     ) -> StreamingSpeakerOutput | Tensor:
         h, aux = self.encoder(self.input_proj(self._prepare_input(x)), offset)
-        embedding = self.embedding(h.mean(dim=1))
+        pooled = h.mean(dim=1)
+        if self.pooling == "stats":
+            pooled = torch.cat([pooled, h.float().var(dim=1).clamp_min(1e-5).sqrt().to(h.dtype)], dim=-1)
+        embedding = self.embedding(self.pool_norm(pooled))
         if not return_frames:
             return embedding
         return StreamingSpeakerOutput(embedding=embedding, frames=h, aux=aux)
