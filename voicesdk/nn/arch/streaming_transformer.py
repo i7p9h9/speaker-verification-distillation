@@ -1,12 +1,14 @@
-"""Streaming (causal) transformer speaker encoders: RoPE and TSCO.
+"""Streaming (causal) transformer speaker encoders: RoPE, TSCO and hybrids.
 
-Two encoders over acoustic frames, both causal so they can run chunk by chunk
+Encoders over acoustic frames, all causal so they can run chunk by chunk
 (``offset`` is the absolute index of the first frame, for RoPE):
 
 * :class:`RoPEEncoder` -- a plain pre-norm transformer with rotary positions;
 * :class:`TSCOEncoder` -- a TSCO-inspired block (causal attention + multi-scale
   dilated causal convolutions, correlation and observer gates).  Not a
-  validated reproduction of the original.
+  validated reproduction of the original;
+* :class:`HybridEncoder` -- causal Fast Conformer blocks (local acoustic
+  patterns) followed by RoPE or TSCO blocks (longer context).
 
 :class:`StreamingSpeakerEncoder` puts a frontend (as in :class:`ECAPA_TDNN_VAD`)
 and a causal convolutional stem in front and pools the encoder frames into one
@@ -28,10 +30,31 @@ s3     1024     16      12         7
 s4     1280     20      20         11
 =====  =======  ======  =========  ==========
 
-TSCO has fewer layers since its block is ~1.8x larger.  Build with
-``RoPESpeaker(size="s2", feat_type="tf", embed_dim=256)`` or
-``TSCOSpeaker(...)``; explicit ``d_model``/``n_heads``/``n_layers`` override
-the preset.
+TSCO has fewer layers since its block is ~1.8x larger.
+
+The hybrids follow Fast Conformer (Rekesh et al., 2023): the
+:class:`FastConformerSubsampling` stem (depthwise-separable 2-D convolutions,
+8x fewer frames: 80 ms at a 10 ms hop) and Conformer blocks with a 9-frame
+convolution kernel, made causal; RoPE replaces the relative positional
+encoding and LayerNorm the BatchNorm of the convolution module (streaming).
+They keep the widths and split the same budget about evenly between
+``n_conformer`` Conformer blocks (~1.9x a RoPE block) and ``n_layers`` blocks
+on top, all at the subsampled frame rate:
+
+=====  ==================  ==================
+size   FastConf. + RoPE    FastConf. + TSCO
+=====  ==================  ==================
+s0     3 + 6               3 + 3
+s1     4 + 6               4 + 3
+s2     3 + 6               3 + 3
+s3     3 + 6               3 + 3
+s4     5 + 10              5 + 5
+=====  ==================  ==================
+
+Build with ``RoPESpeaker(size="s2", feat_type="tf", embed_dim=256)``,
+``TSCOSpeaker(...)``, ``FastConformerRoPESpeaker(...)`` or
+``FastConformerTSCOSpeaker(...)``; explicit ``d_model``/``n_heads``/``n_layers``
+(/``n_conformer``) override the preset.
 """
 
 from __future__ import annotations
@@ -59,6 +82,20 @@ PRESETS: dict[str, dict[str, dict[str, int]]] = {
         "s3": dict(d_model=1024, n_heads=16, n_layers=7),
         "s4": dict(d_model=1280, n_heads=20, n_layers=11),
     },
+    "fastconformer_rope": {
+        "s0": dict(d_model=256, n_heads=4, n_conformer=3, n_layers=6),
+        "s1": dict(d_model=384, n_heads=6, n_conformer=4, n_layers=6),
+        "s2": dict(d_model=640, n_heads=10, n_conformer=3, n_layers=6),
+        "s3": dict(d_model=1024, n_heads=16, n_conformer=3, n_layers=6),
+        "s4": dict(d_model=1280, n_heads=20, n_conformer=5, n_layers=10),
+    },
+    "fastconformer_tsco": {
+        "s0": dict(d_model=256, n_heads=4, n_conformer=3, n_layers=3),
+        "s1": dict(d_model=384, n_heads=6, n_conformer=4, n_layers=3),
+        "s2": dict(d_model=640, n_heads=10, n_conformer=3, n_layers=3),
+        "s3": dict(d_model=1024, n_heads=16, n_conformer=3, n_layers=3),
+        "s4": dict(d_model=1280, n_heads=20, n_conformer=5, n_layers=5),
+    },
 }
 
 
@@ -79,6 +116,41 @@ class CausalConvStem(nn.Module):
         y = F.gelu(self.conv1(F.pad(x.transpose(1, 2), (2, 0))))
         y = F.gelu(self.conv2(F.pad(y, (2, 0))))
         return self.norm(y.transpose(1, 2))
+
+
+class FastConformerSubsampling(nn.Module):
+    """Fast Conformer subsampling, causal in time: a 3x3 Conv2d with stride 2
+    then depthwise-separable ones (depthwise 3x3 stride 2 + pointwise), ReLU
+    after each, until the frames are ``factor`` (2, 4 or 8) times fewer; the
+    channels x remaining frequencies are projected to ``d_model``.  Time is
+    padded on the left only, frequency on both sides."""
+
+    def __init__(self, in_channels: int, num_frequencies: int, d_model: int,
+                 factor: int = 8, channels: int = 256):
+        super().__init__()
+        if factor not in (2, 4, 8):
+            raise ValueError(f"Fast Conformer subsampling factor must be 2, 4 or 8, got {factor}")
+        self.in_channels = in_channels
+        layers: list[nn.Module] = [nn.Conv2d(in_channels, channels, 3, stride=2), nn.ReLU()]
+        for _ in range(factor.bit_length() - 2):
+            layers += [nn.Conv2d(channels, channels, 3, stride=2, groups=channels),
+                       nn.Conv2d(channels, channels, 1), nn.ReLU()]
+        self.convs = nn.ModuleList(layers)
+        freq = num_frequencies
+        for _ in range(factor.bit_length() - 1):
+            freq = (freq - 1) // 2 + 1
+        self.out = nn.Linear(channels * freq, d_model)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [B,T,C*F] -> [B,C,F,T] -> ... -> [B,T/factor,D]
+        b, t, _ = x.shape
+        y = x.transpose(1, 2).reshape(b, self.in_channels, -1, t)
+        for layer in self.convs:
+            if isinstance(layer, nn.Conv2d) and layer.kernel_size[0] > 1:
+                y = F.pad(y, (2, 0, 1, 1))  # (time left, time right, freq top, freq bottom)
+            y = layer(y)
+        b, c, f, t = y.shape
+        return self.out(y.permute(0, 3, 1, 2).reshape(b, t, c * f))
 
 
 class StreamingSpeakerOutput(tp.NamedTuple):
@@ -241,6 +313,96 @@ class TSCOEncoder(nn.Module):
         return h, aux
 
 
+class FeedForward(nn.Module):
+    """Pre-norm Swish feed-forward of the Conformer (expansion 4)."""
+
+    def __init__(self, d_model: int, dropout: float):
+        super().__init__()
+        self.net = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, 4 * d_model), nn.SiLU(),
+                                 nn.Dropout(dropout), nn.Linear(4 * d_model, d_model))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.net(x)
+
+
+class CausalConvModule(nn.Module):
+    """Conformer convolution module, causal: pointwise conv + GLU, depthwise
+    conv padded on the left only, LayerNorm (not BatchNorm, which would mix
+    frames of a chunk at training time), Swish, pointwise conv."""
+
+    def __init__(self, d_model: int, kernel_size: int, dropout: float):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.norm = nn.LayerNorm(d_model)
+        self.pointwise1 = nn.Conv1d(d_model, 2 * d_model, 1)
+        self.depthwise = nn.Conv1d(d_model, d_model, kernel_size, groups=d_model)
+        self.conv_norm = nn.LayerNorm(d_model)
+        self.pointwise2 = nn.Conv1d(d_model, d_model, 1)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: Tensor) -> Tensor:
+        y = F.glu(self.pointwise1(self.norm(x).transpose(1, 2)), dim=1)
+        y = self.depthwise(F.pad(y, (self.kernel_size - 1, 0)))
+        y = F.silu(self.conv_norm(y.transpose(1, 2))).transpose(1, 2)
+        return self.dropout(self.pointwise2(y).transpose(1, 2))
+
+
+class ConformerBlock(nn.Module):
+    """Causal Conformer block (Gulati et al., 2020): half-step FFN, causal RoPE
+    self-attention, causal convolution module, half-step FFN, LayerNorm.  With
+    ``kernel_size=9`` after the 8x subsampling it is the Fast Conformer one."""
+
+    def __init__(self, d_model: int, n_heads: int, kernel_size: int, dropout: float):
+        super().__init__()
+        self.ffn1 = FeedForward(d_model, dropout)
+        self.attn_norm = nn.LayerNorm(d_model)
+        self.attn = RoPEAttention(d_model, n_heads, dropout)
+        self.conv = CausalConvModule(d_model, kernel_size, dropout)
+        self.ffn2 = FeedForward(d_model, dropout)
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: Tensor, offset: int) -> Tensor:
+        x = x + 0.5 * self.dropout(self.ffn1(x))
+        x = x + self.dropout(self.attn(self.attn_norm(x), offset))
+        x = x + self.conv(x)
+        x = x + 0.5 * self.dropout(self.ffn2(x))
+        return self.norm(x)
+
+
+class HybridEncoder(nn.Module):
+    """``n_conformer`` :class:`ConformerBlock` then ``n_layers`` RoPE or TSCO
+    blocks (``top``), one final LayerNorm; the TSCO consistency loss as in
+    :class:`TSCOEncoder`."""
+
+    def __init__(self, d_model: int, n_heads: int, n_conformer: int, n_layers: int,
+                 top: tp.Literal["rope", "tsco"], dropout: float, kernel_size: int = 9,
+                 n_scales: int = 3, consistency_weight: float = 0.0):
+        super().__init__()
+        if top == "rope":
+            upper: list[nn.Module] = [RoPEBlock(d_model, n_heads, dropout) for _ in range(n_layers)]
+        elif top == "tsco":
+            upper = [TSCOBlock(d_model, n_heads, n_scales, dropout) for _ in range(n_layers)]
+        else:
+            raise ValueError(f"unsupported top: {top!r}")
+        self.blocks = nn.ModuleList(
+            [ConformerBlock(d_model, n_heads, kernel_size, dropout) for _ in range(n_conformer)] + upper
+        )
+        self.norm = nn.LayerNorm(d_model)
+        self.predictor = nn.Linear(d_model, d_model) if top == "tsco" else None
+        self.consistency_weight = consistency_weight
+
+    def forward(self, x: Tensor, offset: int) -> tuple[Tensor, Tensor]:
+        for block in self.blocks:
+            x = block(x, offset)
+        h = self.norm(x)
+        aux = h.new_zeros(())
+        if self.training and self.consistency_weight and self.predictor is not None:
+            # Experimental auxiliary objective; target is detached.
+            aux = self.consistency_weight * F.mse_loss(self.predictor(h), h.detach())
+        return h, aux
+
+
 class StreamingSpeakerEncoder(nn.Module):
     """Frontend -> stem -> causal encoder -> pooling -> BatchNorm -> embedding.
 
@@ -250,7 +412,8 @@ class StreamingSpeakerEncoder(nn.Module):
     outputs are flattened into the input dimension.
 
     ``stem="conv"`` is :class:`CausalConvStem` (``subsampling`` divides the frame
-    rate), ``"linear"`` a per-frame projection.  ``pooling="stats"`` takes the
+    rate), ``"fast"`` :class:`FastConformerSubsampling` (``subsampling`` 2, 4
+    or 8), ``"linear"`` a per-frame projection.  ``pooling="stats"`` takes the
     mean and std of the frames, ``"mean"`` the mean only.  The BatchNorm after
     the pooling removes the component shared by all utterances: without it the
     mean of the (LayerNorm-ed) frames is nearly the same vector for every input
@@ -275,7 +438,7 @@ class StreamingSpeakerEncoder(nn.Module):
         feat_type: str | None = "pt",
         spec_params: dict | None = None,
         use_feats: bool = True,
-        stem: tp.Literal["conv", "linear"] = "conv",
+        stem: tp.Literal["conv", "fast", "linear"] = "conv",
         subsampling: int = 1,
         pooling: tp.Literal["stats", "mean"] = "stats",
     ) -> None:
@@ -310,9 +473,11 @@ class StreamingSpeakerEncoder(nn.Module):
         in_dim = spec_dims * num_frequencies
         if stem == "conv":
             self.input_proj: nn.Module = CausalConvStem(in_dim, d_model, subsampling)
+        elif stem == "fast":
+            self.input_proj = FastConformerSubsampling(spec_dims, num_frequencies, d_model, subsampling)
         elif stem == "linear":
             if subsampling != 1:
-                raise ValueError("subsampling needs stem='conv'")
+                raise ValueError("subsampling needs stem='conv' or 'fast'")
             self.input_proj = nn.Linear(in_dim, d_model)
         else:
             raise ValueError(f"unsupported stem: {stem!r}")
@@ -368,15 +533,14 @@ def _init_weights(module: nn.Module) -> None:
             nn.init.zeros_(module.bias)
 
 
-def _size(arch: str, size: str | None, d_model, n_heads, n_layers) -> tuple[int, int, int]:
+def _size(arch: str, size: str | None, **given: int | None) -> dict[str, int]:
+    """The preset ``size`` of ``arch`` with the ``given`` values that are not None."""
     preset = {} if size is None else dict(PRESETS[arch][size])
-    for key, value in (("d_model", d_model), ("n_heads", n_heads), ("n_layers", n_layers)):
-        if value is not None:
-            preset[key] = value
-    missing = {"d_model", "n_heads", "n_layers"} - preset.keys()
+    preset.update({k: v for k, v in given.items() if v is not None})
+    missing = set(given) - preset.keys()
     if missing:
         raise ValueError(f"give size= or {sorted(missing)}")
-    return preset["d_model"], preset["n_heads"], preset["n_layers"]
+    return preset
 
 
 def RoPESpeaker(
@@ -389,8 +553,9 @@ def RoPESpeaker(
     **kwargs: tp.Any,
 ) -> StreamingSpeakerEncoder:
     """RoPE transformer speaker encoder; ``kwargs`` go to :class:`StreamingSpeakerEncoder`."""
-    d_model, n_heads, n_layers = _size("rope", size, d_model, n_heads, n_layers)
-    return StreamingSpeakerEncoder(RoPEEncoder(d_model, n_heads, n_layers, dropout), d_model, **kwargs)
+    p = _size("rope", size, d_model=d_model, n_heads=n_heads, n_layers=n_layers)
+    encoder = RoPEEncoder(p["d_model"], p["n_heads"], p["n_layers"], dropout)
+    return StreamingSpeakerEncoder(encoder, p["d_model"], **kwargs)
 
 
 def TSCOSpeaker(
@@ -405,12 +570,60 @@ def TSCOSpeaker(
     **kwargs: tp.Any,
 ) -> StreamingSpeakerEncoder:
     """TSCO speaker encoder; ``kwargs`` go to :class:`StreamingSpeakerEncoder`."""
-    d_model, n_heads, n_layers = _size("tsco", size, d_model, n_heads, n_layers)
-    encoder = TSCOEncoder(d_model, n_heads, n_layers, n_scales, dropout, consistency_weight)
-    return StreamingSpeakerEncoder(encoder, d_model, **kwargs)
+    p = _size("tsco", size, d_model=d_model, n_heads=n_heads, n_layers=n_layers)
+    encoder = TSCOEncoder(p["d_model"], p["n_heads"], p["n_layers"], n_scales, dropout, consistency_weight)
+    return StreamingSpeakerEncoder(encoder, p["d_model"], **kwargs)
+
+
+def FastConformerRoPESpeaker(
+    size: str | None = "s0",
+    *,
+    d_model: int | None = None,
+    n_heads: int | None = None,
+    n_conformer: int | None = None,
+    n_layers: int | None = None,
+    kernel_size: int = 9,
+    dropout: float = 0.1,
+    **kwargs: tp.Any,
+) -> StreamingSpeakerEncoder:
+    """Fast Conformer (8x subsampling stem, Conformer blocks), then RoPE blocks;
+    ``kwargs`` go to :class:`StreamingSpeakerEncoder` (``stem``/``subsampling``
+    default to ``"fast"``/8)."""
+    kwargs = {"stem": "fast", "subsampling": 8, **kwargs}
+    p = _size("fastconformer_rope", size, d_model=d_model, n_heads=n_heads, n_conformer=n_conformer, n_layers=n_layers)
+    encoder = HybridEncoder(p["d_model"], p["n_heads"], p["n_conformer"], p["n_layers"], "rope", dropout, kernel_size)
+    return StreamingSpeakerEncoder(encoder, p["d_model"], **kwargs)
+
+
+def FastConformerTSCOSpeaker(
+    size: str | None = "s0",
+    *,
+    d_model: int | None = None,
+    n_heads: int | None = None,
+    n_conformer: int | None = None,
+    n_layers: int | None = None,
+    kernel_size: int = 9,
+    n_scales: int = 3,
+    dropout: float = 0.1,
+    consistency_weight: float = 0.0,
+    **kwargs: tp.Any,
+) -> StreamingSpeakerEncoder:
+    """Fast Conformer (8x subsampling stem, Conformer blocks), then TSCO blocks;
+    ``kwargs`` go to :class:`StreamingSpeakerEncoder` (``stem``/``subsampling``
+    default to ``"fast"``/8)."""
+    kwargs = {"stem": "fast", "subsampling": 8, **kwargs}
+    p = _size("fastconformer_tsco", size, d_model=d_model, n_heads=n_heads, n_conformer=n_conformer, n_layers=n_layers)
+    encoder = HybridEncoder(p["d_model"], p["n_heads"], p["n_conformer"], p["n_layers"], "tsco", dropout,
+                            kernel_size, n_scales, consistency_weight)
+    return StreamingSpeakerEncoder(encoder, p["d_model"], **kwargs)
 
 
 __all__ = [
+    "ConformerBlock",
+    "FastConformerRoPESpeaker",
+    "FastConformerSubsampling",
+    "FastConformerTSCOSpeaker",
+    "HybridEncoder",
     "PRESETS",
     "RoPEEncoder",
     "RoPESpeaker",
