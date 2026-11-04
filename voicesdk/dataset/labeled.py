@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing as tp
 
 import torch
+from warnings import warn
 
 from ._registry import _NameRegistry
 from ._shared_weights import SharedWeights
@@ -190,6 +191,11 @@ class MarkedDataset(LabeledAggregatedDataset):
         inner_ds = self._inner_datasets[dataset_idx]
         source_name = self._weighted[dataset_idx].name or inner_ds.name
 
-        sample, leaf_path = _sample_with_path(inner_ds)
-        dataset_name = f"{self._name}/{source_name}/{leaf_path}" if leaf_path else f"{self._name}/{source_name}"
+        try:
+            sample, leaf_path = _sample_with_path(inner_ds)
+            dataset_name = f"{self._name}/{source_name}/{leaf_path}" if leaf_path else f"{self._name}/{source_name}"
+        except Exception as e:
+            warn(f"Error {e}")
+            sample, leaf_path = _sample_with_path(inner_ds)
+            dataset_name = f"{self._name}/{source_name}/{leaf_path}" if leaf_path else f"{self._name}/{source_name}"
         return NamedSample(sample=sample, dataset_name=dataset_name)

@@ -15,7 +15,8 @@ for ((i = 1; i <= $#; i++)); do
     [[ ${!i} == --bench-dir=* ]] && BENCH_ARGS=("${!i}")
 done
 
-py "$HERE/benchmark.py" nemotron "$@"
-py "$HERE/benchmark.py" silero tune ecapa vbx --vad tuned "$@"
+# py "$HERE/benchmark.py" nemotron "$@"
+# py "$HERE/benchmark.py" silero tune ecapa vbx --vad tuned "$@"
+py "$HERE/benchmark.py" ecapa vbx --vad tuned "$@"
 py "$HERE/benchmark.py" average ecapa vbx --vad average "$@"
 py "$HERE/aggregate.py" "${BENCH_ARGS[@]}"

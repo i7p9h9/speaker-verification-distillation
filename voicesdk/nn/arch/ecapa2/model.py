@@ -28,6 +28,7 @@ class ECAPA2Output(NamedTuple):
 
     embedding: torch.Tensor
     attention: torch.Tensor
+    embeddings_frames: torch.Tensor | None = None
 
 
 class ECAPA2(nn.Module):
@@ -82,7 +83,7 @@ class ECAPA2(nn.Module):
             num_frequencies = self.spec.dim
         elif feat_type == "pt_stft":
             self.spec = features.STFT(**spec_params)
-            num_frequencies=spec_params.get("n_fft", 512)
+            num_frequencies = spec_params.get("n_fft", 512)
         else:
             raise ValueError(f"unsupported feat_type: {feat_type!r}")
 
@@ -120,9 +121,7 @@ class ECAPA2(nn.Module):
         if x.shape[1] != self.spec_dims:
             raise ValueError(f"expected {self.spec_dims} feature channels, got {x.shape[1]}")
         if x.shape[2] != self.num_frequencies:
-            raise ValueError(
-                f"expected {self.num_frequencies} frequency bins, got {x.shape[2]}"
-            )
+            raise ValueError(f"expected {self.num_frequencies} frequency bins, got {x.shape[2]}")
         return x
 
     def forward(
@@ -140,8 +139,8 @@ class ECAPA2(nn.Module):
         if not return_attention:
             return embedding
         vad_logits = channel_attention_logits.mean(dim=1)
-        return embedding
-        # return ECAPA2Output(embedding=embedding, attention=vad_logits)
+        # return embedding
+        return ECAPA2Output(embedding=embedding, attention=vad_logits)
 
     def extract_embedding(self, x: torch.Tensor) -> torch.Tensor:
         """Return only the utterance-level speaker embedding."""

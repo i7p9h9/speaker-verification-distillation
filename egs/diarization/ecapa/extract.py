@@ -159,8 +159,8 @@ def load_model(args: argparse.Namespace) -> nn.Module:
         feat_type="tf",
         embed_dim=256,
         is_use_std_pool=False,
-        is_use_pooling_global_context=False,
-        is_channel_dependent_attention=True,
+        is_pooling_global_context=False,
+        is_pooling_channel_dependent=True,
     )
 
     # exp-003

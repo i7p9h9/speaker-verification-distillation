@@ -1,0 +1,9 @@
+services:
+  dev:
+    volumes:
+      - type: bind
+        source: /media/hdd
+        target: /media/hdd
+      - type: bind
+        source: /media/shared
+        target: /media/shared

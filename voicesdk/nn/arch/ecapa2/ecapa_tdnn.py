@@ -19,9 +19,13 @@ class ECAPA_TDNN_VAD(nn.Module):
     The backbone follows Desplanques et al. (Interspeech 2020): a k=5 TDNN
     layer, three SE-Res2Blocks with dilations 2, 3 and 4, multi-layer feature
     aggregation and a 1x1 convolution to ``mfa_channels``.  Pooling is
-    :class:`ChannelDependentAttentiveStatisticsPooling`, whose attention depends
-    on the current frame only, so the channel-averaged pre-softmax scores can be
-    used as VAD logits (equation (5) of Thienpondt and Demuynck, Odyssey 2024).
+    :class:`ChannelDependentAttentiveStatisticsPooling`; its channel-averaged
+    pre-softmax scores are the VAD logits (equation (5) of Thienpondt and
+    Demuynck, Odyssey 2024).  By default the attention depends on the current
+    frame only; ``pooling_global_context=True`` adds the utterance mean and std
+    to its input, as in the original ECAPA-TDNN and ECAPA2.
+    ``pooling_channel_dependent=False`` uses one attention score per frame,
+    shared by all channels, which is then the VAD logit itself.
 
     Feature extraction mirrors :class:`ECAPA2`.  Multi-channel frontends
     (e.g. ``pt_stft``) are flattened into the TDNN input dimension.
@@ -41,6 +45,9 @@ class ECAPA_TDNN_VAD(nn.Module):
         mfa_channels: int = 1536,
         scale: int = 8,
         pooling_hidden_channels: int = 128,
+        is_use_std_pool: bool = True,
+        is_pooling_global_context: bool = False,
+        is_pooling_channel_dependent: bool = True,
     ) -> None:
         super().__init__()
         spec_params = {} if spec_params is None else dict(spec_params)
@@ -85,9 +92,14 @@ class ECAPA_TDNN_VAD(nn.Module):
         self.pooling = ChannelDependentAttentiveStatisticsPooling(
             mfa_channels,
             hidden_channels=pooling_hidden_channels,
+            is_use_std_pool=is_use_std_pool,
+            global_context=is_pooling_global_context,
+            channel_dependent=is_pooling_channel_dependent,
         )
-        self.pool_norm = nn.BatchNorm1d(mfa_channels * 2)
-        self.embedding = nn.Linear(mfa_channels * 2, embed_dim)
+
+        increase = 2 if is_use_std_pool else 1
+        self.pool_norm = nn.BatchNorm1d(mfa_channels * increase)
+        self.embedding = nn.Linear(mfa_channels * increase, embed_dim)
         self.embedding_dim = embed_dim
 
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
@@ -107,7 +119,7 @@ class ECAPA_TDNN_VAD(nn.Module):
         self,
         x: torch.Tensor,
         *,
-        return_attention: bool = True,
+        return_attention: bool = False,
     ) -> ECAPA2Output | torch.Tensor:
         x = self._prepare_input(x)
         out1 = self.layer1(x)
@@ -121,9 +133,10 @@ class ECAPA_TDNN_VAD(nn.Module):
 
         if not return_attention:
             return embedding
+
         vad_logits = channel_attention_logits.mean(dim=1)
-        # return embedding
-        return ECAPA2Output(embedding=embedding, attention=vad_logits)
+
+        return ECAPA2Output(embedding=embedding, attention=vad_logits, embeddings_frames=x)
 
     def extract_embedding(self, x: torch.Tensor) -> torch.Tensor:
         """Return only the utterance-level speaker embedding."""

@@ -4,24 +4,25 @@
 
 # datasets, the roots of scripts/datasets.tsv are under it (scripts/prepare_data.py
 # writes <root>/prepared there)
-data_dir: /media/raid/diarization/data
+data_dir: /media/shared/data/diariazation/testing/
 
 # VBx reference models (ResNet101_8kHz, ResNet101_16kHz, redimnet*, see vbx/models.py)
-vbx_models: /media/data2/Projects/VBx/VBx/models
+vbx_models: /media/hdd/models/vbx/models
 
 # scripts/benchmark.py, scripts/aggregate.py
 benchmark:
-  dir: /media/raid/diarization/results/bench
+  dir: /media/shared/results/diarization/bench
   # name -> extract.py options; ckpt and config are paths
   ecapa_models:
     ecapa-tdnn-003:
       arch: ECAPA_TDNN_VAD
-      ckpt: /media/raid/diarization/exps/ecapa-tdnn-003/last.ckpt
+      ckpt: /media/hdd/models/ecapa-vad/ecapa-tdnn-003/last.ckpt
       args: [--batch-size, "32"]
     resnettf-teacher-vox4:
       arch: ResNetTF
-      config: ../voxceleb-v2/data/cfg-models/rn100_v016_flr_vox4_v2.yaml
-      ckpt: ../voxceleb-v2/data/ckpt/rn100_v016_flr_vox4_v2/model.pt
+      config: /media/hdd/models/ecapa-vad/rn100_v016_flr_vox4_v2/rn100_v016_flr_vox4_v2.yaml
+      ckpt: /media/hdd/models/ecapa-vad/rn100_v016_flr_vox4_v2/model.pt
       args: [--batch-size, "32"]
   # presets of vbx/models.py
-  vbx_models: [resnet101-8k, resnet101-16k, redimnet, redimnet-tel, redimnet-tel-small]
+  # vbx_models: [resnet101-8k, resnet101-16k, redimnet, redimnet-tel, redimnet-tel-small]
+  vbx_models: [redimnet-tel, redimnet-tel-small]

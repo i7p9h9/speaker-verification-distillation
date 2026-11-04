@@ -20,6 +20,8 @@ dependencies = [
     "onnx>=1.23.2",
     "onnx2torch>=1.5.15",
     "optuna>=5.0.0",
+    "polars>=2.0.0",
+    "pyarrow>=26.0.0",
     "pytorch-lightning>=2.5,<2.6",
     "pyyaml>=6,<7",
     "resampy>=0.4.3,<0.5",
@@ -29,6 +31,7 @@ dependencies = [
     "tensorboard>=2.18,<3",
     "torch==2.13.0",
     "torchaudio==2.11.0",
+    "torchcodec>=0.17.0",
     "tqdm>=4.66,<5",
 ]
 
