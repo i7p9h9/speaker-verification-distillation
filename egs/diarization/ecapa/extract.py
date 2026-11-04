@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import typing as tp
 from pathlib import Path
 
@@ -377,6 +378,8 @@ def main() -> None:
                 tmp = out_paths[file_idx].with_suffix(".npz.tmp")
                 with open(tmp, "wb") as f:
                     np.savez(f, **acc.result())
+                    f.flush()
+                    os.fsync(f.fileno())  # else a crash can leave the renamed file empty
                 tmp.replace(out_paths[file_idx])
                 progress.update()
 

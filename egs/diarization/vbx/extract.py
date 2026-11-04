@@ -31,6 +31,7 @@ Speech comes from one of ``--vad-silero DIR`` (Silero segments, or with
 from __future__ import annotations
 
 import argparse
+import os
 import typing as tp
 from pathlib import Path
 
@@ -214,6 +215,8 @@ def save(item: Item, emb: np.ndarray) -> None:
     tmp = item.out.with_suffix(".npz.tmp")
     with open(tmp, "wb") as f:
         np.savez(f, embeddings=emb[ok].astype(np.float32), starts=starts[ok], ends=ends[ok], speech=item.speech)
+        f.flush()
+        os.fsync(f.fileno())  # else a crash can leave the renamed file empty
     tmp.replace(item.out)
 
 

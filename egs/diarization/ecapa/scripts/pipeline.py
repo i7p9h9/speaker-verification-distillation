@@ -199,7 +199,7 @@ def stage_extract(wav_dir: Path, npz_dir: Path, extract_args: tp.List[str], forc
     state_path = npz_dir / ".config.json"
     state = load_state(state_path)
     same = state is not None and state.get("key") == key and not force
-    if same and state.get("done"):
+    if same and state.get("done") and not silero_vad.drop_broken(npz_dir):
         print(f"extract: up to date ({npz_dir})")
         return
     if same:

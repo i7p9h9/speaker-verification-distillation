@@ -236,7 +236,7 @@ def stage_extract(ex: Extraction, force: bool) -> None:
     state_path = ex.dir / ".config.json"
     state = load_state(state_path)
     same = state is not None and state.get("key") == ex.key and not force
-    if same and state.get("done"):
+    if same and state.get("done") and not silero_vad.drop_broken(ex.dir):
         print(f"extract: up to date ({ex.dir.name}: {ex.model}, vad {ex.vad})")
         return
     if same:

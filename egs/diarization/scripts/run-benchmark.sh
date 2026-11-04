@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The whole benchmark (benchmark.py, see there): Nemotron; Silero VAD tuned per
 # dataset, ecapa and vbx with these thresholds; their mean, ecapa and vbx with it;
-# the summary tables (aggregate.py).  Finished steps are skipped on a re-run.
+# ecapa and vbx with the oracle VAD (reference speech); the summary tables
+# (aggregate.py) and their HTML report (report.py).  Finished steps are skipped
+# on a re-run.
 #
 #   scripts/run-benchmark.sh [--bench-dir DIR] [--datasets a,b] [benchmark.py options]
 set -euo pipefail
@@ -18,4 +20,6 @@ done
 py "$HERE/benchmark.py" nemotron "$@"
 py "$HERE/benchmark.py" silero tune ecapa vbx --vad tuned "$@"
 py "$HERE/benchmark.py" average ecapa vbx --vad average "$@"
+py "$HERE/benchmark.py" ecapa vbx --vad oracle "$@"
 py "$HERE/aggregate.py" "${BENCH_ARGS[@]}"
+py "$HERE/report.py" "${BENCH_ARGS[@]}"

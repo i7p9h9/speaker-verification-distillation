@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+/* Standalone copy of the benchmark dashboard: the tokens of the dashboard
+   runtime, light and dark. */
+:root {
+  --font-anthropic-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-anthropic-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --color-bg: #fbfbfa; --color-fg: #1f2328; --color-fg-muted: #656d76; --color-panel: #ffffff;
+  --color-border-line: #e3e4e2; --color-ok: #1a7f37; --color-bad: #cf222e;
+  --cds-text-secondary: #656d76; --cds-border: #d0d7de; --cds-surface-popover: #ffffff;
+  --cds-shadow-popover: 0 4px 16px rgba(31, 35, 40, .12);
+  --cds-chart-grid: #ececea; --cds-chart-axis: #8c959f; --cds-chart-muted: #c4c8cc;
+  --series-1: #6e56cf; --series-2: #d9822b; --series-3: #2b7bb9;
+  --cds-font-size-caption: 0.8125rem; --cds-font-size-body: 0.9375rem; --cds-font-size-heading: 1.0625rem;
+  --cds-font-size-title: 1.75rem; --cds-font-weight-medium: 550;
+  --cds-gap-xs: 0.25rem; --cds-gap-sm: 0.5rem; --cds-gap-md: 1rem; --cds-gap-lg: 1.5rem;
+  --cds-pad-xs: 0.25rem; --cds-pad-sm: 0.5rem; --cds-pad-md: 0.75rem; --cds-pad-lg: 1.25rem;
+  --cds-radius: 8px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #151719; --color-fg: #e6e8ea; --color-fg-muted: #9aa3ad; --color-panel: #1d2023;
+    --color-border-line: #2f3337; --color-ok: #57c27a; --color-bad: #f0626b;
+    --cds-text-secondary: #9aa3ad; --cds-border: #3a3f44; --cds-surface-popover: #24282c;
+    --cds-shadow-popover: 0 4px 16px rgba(0, 0, 0, .45);
+    --cds-chart-grid: #2a2e32; --cds-chart-axis: #6e7781; --cds-chart-muted: #4a5056;
+    --series-1: #9b87f5; --series-2: #f0a35e; --series-3: #5fa8e0;
+    color-scheme: dark;
+  }
+}
+body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-anthropic-sans); font-size: 14px; }
+.bx-page { max-width: 90rem; margin-inline: auto; padding: 2rem clamp(1rem, 3vw, 2.5rem); }
+code { font-size: 0.92em; }
+.bx { display: grid; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
+.bx-head { display: grid; gap: var(--cds-gap-sm); }
+.bx-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+.bx-take { margin: 0; font-size: var(--cds-font-size-body); max-width: 70ch; }
+.bx .bx-take b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bx-note { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); max-width: 80ch; }
+.bx-toggle { display: inline-flex; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); overflow: hidden; width: fit-content; }
+.bx-toggle button { font: inherit; font-size: var(--cds-font-size-caption); padding: var(--cds-pad-xs) var(--cds-pad-md); background: transparent; color: var(--color-fg-muted); border: 0; cursor: pointer; }
+.bx-toggle button[aria-pressed="true"] { background: var(--color-panel); color: var(--color-fg); font-weight: 600; }
+.bx-toggle button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
+.bx-grid { display: grid; gap: var(--cds-gap-md); grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+.bx-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: grid; gap: var(--cds-gap-sm); align-content: start; min-width: 0; }
+.bx-card h2, .bx-card h3 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+.bx-card h3 { font-size: var(--cds-font-size-body); }
+.bx-sub { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.bx-chart { position: relative; min-height: 8rem; }
+.bx-svg { display: block; overflow: visible; }
+.bx-svg text { font-family: var(--font-anthropic-sans); fill: var(--color-fg); font-size: 12px; font-variant-numeric: tabular-nums; }
+.bx-svg .bx-tick { fill: var(--color-fg-muted); font-size: 11px; }
+.bx-svg .bx-muted { fill: var(--color-fg-muted); }
+.bx-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); white-space: nowrap; z-index: 2; }
+.bx-tip .bx-tip-k { color: var(--cds-text-secondary); }
+.bx-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.bx-legend span { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); }
+.bx-legend i { width: 0.75rem; height: 0.75rem; border-radius: 3px; display: inline-block; }
+.bx-tablebox { overflow: auto; max-height: 36rem; }
+.bx-table { border-collapse: collapse; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; width: 100%; }
+.bx-table th, .bx-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); text-align: right; white-space: nowrap; border-bottom: 1px solid var(--color-border-line); }
+.bx-table th { position: sticky; top: 0; background: var(--color-panel); font-weight: 600; z-index: 1; }
+.bx-table th:nth-child(-n+2), .bx-table td:nth-child(-n+2) { text-align: left; }
+.bx-table td.bx-best { font-weight: 700; color: var(--color-ok); }
+.bx-table td.bx-na { color: var(--color-fg-muted); }
+.bx-fail { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); min-height: 8rem; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.bx-fail::before { content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-bad); }
+</style>
+<script>
+/*__D3__*/
+</script>
+</head>
+<body>
+<div class="bx-page">
+
+<div class="bx">
+  <header class="bx-head">
+    <h1 class="bx-title" id="title">__TITLE__</h1>
+    <p class="bx-take" id="takeaway">—</p>
+    <div class="bx-toggle" role="group" aria-label="Scoring">
+      <button type="button" id="mode-with" data-mode="with_overlap" aria-pressed="true">With overlap</button>
+      <button type="button" id="mode-skip" data-mode="skip_overlap" aria-pressed="false">Overlap skipped</button>
+    </div>
+    <p class="bx-note">Generated __GENERATED__ from <code>__SOURCES__</code>. DER in %, lower is better, from <code>aggregate.py</code> (collar 0.25 by default). VAD: <b>tuned</b> uses each dataset's own Silero thresholds, <b>average</b> uses their mean, nemotron has its own. Rows that miss some datasets are greyed out, and their means are not comparable with the full ones.</p>
+  </header>
+
+  <section class="bx-grid" id="overview">
+    <article class="bx-card">
+      <h2 id="h-mean">Mean DER by system</h2>
+      <p class="bx-sub">The <code>mean</code> column of the table. Greyed bars average only the datasets the system has.</p>
+      <div class="bx-legend" id="legend"></div>
+      <div class="bx-chart" id="chart-mean"></div>
+    </article>
+    <article class="bx-card">
+      <h2 id="h-vad">Average vs tuned VAD</h2>
+      <p class="bx-sub">Mean DER with the average Silero thresholds minus with the tuned ones, over the datasets both have. Above zero: tuning per dataset helps.</p>
+      <div class="bx-chart" id="chart-vad"></div>
+    </article>
+    <article class="bx-card">
+      <h2 id="h-overlap">Cost of overlapped speech</h2>
+      <p class="bx-sub">Mean DER with overlap minus with overlap skipped, over the datasets present in both tables.</p>
+      <div class="bx-chart" id="chart-overlap"></div>
+    </article>
+  </section>
+
+  <article class="bx-card" id="table-card">
+    <h2 id="h-table">All results</h2>
+    <p class="bx-sub">Cell shade grows with DER relative to the best system on that dataset (bold green).</p>
+    <div class="bx-tablebox"><table class="bx-table" id="table"><thead><tr></tr></thead><tbody></tbody></table></div>
+  </article>
+
+  <section class="bx-head" id="per-dataset">
+    <h2 class="bx-title" style="font-size: var(--cds-font-size-heading)">DER per dataset</h2>
+    <p class="bx-note">Each dataset on its own scale, systems sorted best first.</p>
+  </section>
+  <div class="bx-grid" id="multiples"></div>
+</div>
+</div>
+<script type="application/json" id="report-data">__DATA__</script>
+<script>
+// The dashboard runtime's ``dash`` for static data: the TSVs are embedded
+// below by report.py, calculations run once, charts redraw on resize.
+const REPORT = JSON.parse(document.getElementById('report-data').textContent);
+const dash = {
+  colors: ['var(--series-1)', 'var(--series-2)', 'var(--series-3)'],
+  calcs: {},
+  data(id) {
+    const ds = REPORT.datasets[id];
+    if (ds) return { status: 'ok', data: ds.rows, columns: ds.columns };
+    if (id in this.calcs) return { status: 'ok', data: this.calcs[id] };
+    return { status: 'missing', data: [] };
+  },
+  calc(id, { inputs, fn }) { this.calcs[id] = fn(...inputs.map((i) => this.data(i).data)); },
+  onData(fn) {
+    fn();
+    let width = window.innerWidth;
+    window.addEventListener('resize', () => {
+      if (window.innerWidth !== width) { width = window.innerWidth; fn(); }
+    });
+  },
+};
+</script>
+<script>
+const IDS = { with_overlap: 'With overlap', skip_overlap: 'Overlap skipped' };
+let mode = 'with_overlap';
+
+const num = (s) => (s == null || s === '' || s === '-') ? null : parseFloat(s);
+const family = (system) => system.split('/')[0];
+const model = (system) => system.split('/').slice(1).join('/') || system;
+const label = (r) => r.vad === '-' ? model(r.system) : `${model(r.system)} · ${r.vad}`;
+const FAMILIES = ['nemotron', 'ecapa', 'vbx'];
+const color = (system) => dash.colors[Math.max(0, FAMILIES.indexOf(family(system))) % dash.colors.length];
+const f2 = d3.format('.2f');
+const fs2 = d3.format('+.2f');
+
+dash.calc('vad_delta_with', {
+  inputs: ['with_overlap'], title: 'Average vs tuned VAD, with overlap',
+  description: 'Per system: mean DER with the average Silero thresholds minus with the tuned ones, over the datasets both variants have.',
+  fn: (with_overlap) => {
+    const num = (s) => (s == null || s === '' || s === '-') ? null : parseFloat(s);
+    const cols = Object.keys(with_overlap[0] || {}).filter((c) => !['system', 'vad', 'mean'].includes(c));
+    const by = {};
+    for (const r of with_overlap) (by[r.system] = by[r.system] || {})[r.vad] = r;
+    const out = [];
+    for (const [system, v] of Object.entries(by)) {
+      if (!v.tuned || !v.average) continue;
+      const both = cols.filter((c) => num(v.tuned[c]) != null && num(v.average[c]) != null);
+      if (!both.length) continue;
+      const m = (k) => both.reduce((s, c) => s + num(v[k][c]), 0) / both.length;
+      out.push({ system, sets: both.length, tuned: +m('tuned').toFixed(2), average: +m('average').toFixed(2), delta: +(m('average') - m('tuned')).toFixed(2) });
+    }
+    return out;
+  },
+});
+
+dash.calc('vad_delta_skip', {
+  inputs: ['skip_overlap'], title: 'Average vs tuned VAD, overlap skipped',
+  description: 'Per system: mean DER with the average Silero thresholds minus with the tuned ones, over the datasets both variants have.',
+  fn: (skip_overlap) => {
+    const num = (s) => (s == null || s === '' || s === '-') ? null : parseFloat(s);
+    const cols = Object.keys(skip_overlap[0] || {}).filter((c) => !['system', 'vad', 'mean'].includes(c));
+    const by = {};
+    for (const r of skip_overlap) (by[r.system] = by[r.system] || {})[r.vad] = r;
+    const out = [];
+    for (const [system, v] of Object.entries(by)) {
+      if (!v.tuned || !v.average) continue;
+      const both = cols.filter((c) => num(v.tuned[c]) != null && num(v.average[c]) != null);
+      if (!both.length) continue;
+      const m = (k) => both.reduce((s, c) => s + num(v[k][c]), 0) / both.length;
+      out.push({ system, sets: both.length, tuned: +m('tuned').toFixed(2), average: +m('average').toFixed(2), delta: +(m('average') - m('tuned')).toFixed(2) });
+    }
+    return out;
+  },
+});
+
+dash.calc('overlap_cost', {
+  inputs: ['with_overlap', 'skip_overlap'], title: 'Cost of overlapped speech',
+  description: 'Per system and VAD: mean DER with overlap minus with overlap skipped, over the datasets present in both tables.',
+  fn: (with_overlap, skip_overlap) => {
+    const num = (s) => (s == null || s === '' || s === '-') ? null : parseFloat(s);
+    const cols = Object.keys(with_overlap[0] || {}).filter((c) => !['system', 'vad', 'mean'].includes(c));
+    const skip = {};
+    for (const r of skip_overlap) skip[`${r.system}|${r.vad}`] = r;
+    const out = [];
+    for (const r of with_overlap) {
+      const s = skip[`${r.system}|${r.vad}`];
+      if (!s) continue;
+      const both = cols.filter((c) => num(r[c]) != null && num(s[c]) != null);
+      if (!both.length) continue;
+      const m = (row) => both.reduce((acc, c) => acc + num(row[c]), 0) / both.length;
+      out.push({ system: r.system, vad: r.vad, sets: both.length, with: +m(r).toFixed(2), skipped: +m(s).toFixed(2), cost: +(m(r) - m(s)).toFixed(2) });
+    }
+    return out;
+  },
+});
+
+function failed(el) {
+  el.classList.remove('dash-skeleton');
+  el.textContent = '';
+  const d = document.createElement('div');
+  d.className = 'bx-fail';
+  d.textContent = 'Failed to load';
+  el.append(d);
+}
+
+function waiting(el, st) {
+  if (st.status === 'ok') return false;
+  if (st.status === 'loading') { el.textContent = ''; el.classList.add('dash-skeleton'); }
+  else failed(el);
+  return true;
+}
+
+// Horizontal bars. items: {label, value, color, opacity, tip: [[k, v], ...], valueText}
+function hbars(el, items, opts = {}) {
+  el.classList.remove('dash-skeleton');
+  el.textContent = '';
+  if (!items.length) {
+    const p = document.createElement('p');
+    p.className = 'bx-sub';
+    p.textContent = opts.empty || 'Nothing to compare yet.';
+    el.append(p);
+    return;
+  }
+  const W = Math.max(260, el.clientWidth);
+  const rowH = 22;
+  const top = 4, axisH = 22;
+  const H = top + items.length * rowH + axisH;
+  const svg = d3.select(el).append('svg').attr('class', 'bx-svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+
+  let lw = 0, vw = 0;
+  const probe = svg.append('g');
+  for (const d of items) {
+    lw = Math.max(lw, probe.append('text').text(d.label).node().getComputedTextLength());
+    vw = Math.max(vw, probe.append('text').text(d.valueText).node().getComputedTextLength());
+  }
+  probe.remove();
+  lw = Math.min(lw, W * 0.45);
+  const x0 = lw + 10, x1 = W - vw - 10;
+  const vals = items.map((d) => d.value);
+  const lo = Math.min(0, d3.min(vals)), hi = Math.max(0, d3.max(vals));
+  const x = d3.scaleLinear([lo, hi === lo ? lo + 1 : hi], [x0, x1]).nice();
+
+  const ticks = x.ticks(Math.max(2, Math.floor((x1 - x0) / 70)));
+  const g = svg.append('g');
+  g.selectAll('line.grid').data(ticks).join('line')
+    .attr('x1', (t) => x(t)).attr('x2', (t) => x(t)).attr('y1', top).attr('y2', H - axisH + 2)
+    .style('stroke', (t) => t === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)').attr('stroke-width', 1);
+  g.selectAll('text.tick').data(ticks).join('text').attr('class', 'bx-tick')
+    .attr('x', (t) => x(t)).attr('y', H - 6).attr('text-anchor', 'middle').text((t) => d3.format('~g')(t));
+
+  const tip = document.createElement('div');
+  tip.className = 'bx-tip';
+  tip.hidden = true;
+  el.append(tip);
+
+  const rows = svg.append('g').selectAll('g').data(items).join('g')
+    .attr('transform', (d, i) => `translate(0, ${top + i * rowH})`);
+  rows.append('text').attr('x', x0 - 8).attr('y', rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+    .attr('class', (d) => d.muted ? 'bx-muted' : null)
+    .text((d) => d.label);
+  rows.append('rect')
+    .attr('x', (d) => x(Math.min(0, d.value))).attr('y', 3)
+    .attr('width', (d) => Math.max(1, Math.abs(x(d.value) - x(0)))).attr('height', rowH - 6).attr('rx', 4)
+    .style('fill', (d) => d.color).style('fill-opacity', (d) => d.opacity);
+  rows.append('text').attr('x', W - 2).attr('y', rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+    .attr('class', (d) => d.muted ? 'bx-muted' : null).text((d) => d.valueText);
+  rows.append('rect').attr('x', 0).attr('y', 0).attr('width', W).attr('height', rowH).attr('fill', 'transparent')
+    .on('mousemove', (ev, d) => {
+      tip.textContent = '';
+      const k = document.createElement('div');
+      k.className = 'bx-tip-k';
+      k.textContent = d.label;
+      tip.append(k);
+      for (const [a, b] of d.tip) {
+        const line = document.createElement('div');
+        line.textContent = `${a}: ${b}`;
+        tip.append(line);
+      }
+      tip.hidden = false;
+      const [mx, my] = d3.pointer(ev, el);
+      const tw = tip.offsetWidth;
+      tip.style.left = `${Math.max(0, Math.min(mx + 12, el.clientWidth - tw))}px`;
+      tip.style.top = `${my + 12}px`;
+    })
+    .on('mouseleave', () => { tip.hidden = true; });
+  el.style.minHeight = `${H}px`;
+}
+
+function datasetCols(st) {
+  const cols = st.columns || Object.keys(st.data[0] || {});
+  return cols.filter((c) => !['system', 'vad', 'mean'].includes(c));
+}
+
+function drawLegend() {
+  const el = document.getElementById('legend');
+  el.textContent = '';
+  for (const fam of FAMILIES) {
+    const s = document.createElement('span');
+    const i = document.createElement('i');
+    i.style.background = color(fam);
+    s.append(i, document.createTextNode(fam));
+    el.append(s);
+  }
+  const s = document.createElement('span');
+  const i = document.createElement('i');
+  i.style.background = color('vbx');
+  i.style.opacity = '0.5';
+  s.append(i, document.createTextNode('average VAD (lighter)'));
+  el.append(s);
+}
+
+function draw() {
+  for (const b of document.querySelectorAll('.bx-toggle button')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+  const st = dash.data(mode);
+  const take = document.getElementById('takeaway');
+  const chartMean = document.getElementById('chart-mean');
+  const multiples = document.getElementById('multiples');
+  const table = document.getElementById('table');
+  drawLegend();
+
+  if (st.status !== 'ok') {
+    waiting(chartMean, st);
+    if (st.status === 'loading') { take.classList.add('dash-skeleton'); take.textContent = '—'; }
+    else { take.classList.remove('dash-skeleton'); take.textContent = 'The results file did not load.'; }
+    multiples.textContent = '';
+    table.querySelector('thead tr').textContent = '';
+    table.querySelector('tbody').textContent = '';
+  } else {
+    const rows = st.data;
+    const cols = datasetCols(st);
+    const complete = (r) => cols.every((c) => num(r[c]) != null);
+
+    // takeaway
+    take.classList.remove('dash-skeleton');
+    take.textContent = '';
+    const full = rows.filter(complete).sort((a, b) => num(a.mean) - num(b.mean));
+    const best = full[0];
+    const nem = rows.find((r) => r.system === 'nemotron');
+    const mark = (r) => {
+      const b = document.createElement('b');
+      b.textContent = r.mean;
+      return b;
+    };
+    if (best) {
+      take.append(`${IDS[mode]}: the lowest mean DER over all ${cols.length} datasets is `, mark(best), ` (${best.vad === '-' ? best.system : `${best.system}, ${best.vad} VAD`}).`);
+      if (nem && nem !== best && complete(nem)) take.append(' Nemotron: ', mark(nem), '.');
+      const partial = rows.length - full.length;
+      if (partial) take.append(` ${partial} rows miss some datasets and are left out of this ranking.`);
+    } else {
+      take.textContent = 'No system has results on every dataset yet.';
+    }
+
+    // mean bars
+    const items = rows.filter((r) => num(r.mean) != null).map((r) => {
+      const n = cols.filter((c) => num(r[c]) != null).length;
+      const isFull = n === cols.length;
+      return {
+        label: label(r), value: num(r.mean), color: isFull ? color(r.system) : 'var(--cds-chart-muted)',
+        opacity: r.vad === 'average' ? 0.5 : 1, muted: !isFull, full: isFull,
+        valueText: isFull ? f2(num(r.mean)) : `${f2(num(r.mean))} (${n}/${cols.length})`,
+        tip: [['system', r.system], ['VAD', r.vad], ['mean DER', r.mean], ['datasets', `${n} of ${cols.length}`]],
+      };
+    }).sort((a, b) => (b.full - a.full) || (a.value - b.value));
+    hbars(chartMean, items);
+
+    // table
+    const head = table.querySelector('thead tr');
+    head.textContent = '';
+    const allCols = ['system', 'vad', ...cols, 'mean'];
+    for (const c of allCols) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = c;
+      head.append(th);
+    }
+    const colMin = {}, colMax = {};
+    for (const c of cols) {
+      const v = rows.map((r) => num(r[c])).filter((x) => x != null);
+      colMin[c] = d3.min(v); colMax[c] = d3.max(v);
+    }
+    const body = table.querySelector('tbody');
+    body.textContent = '';
+    for (const r of rows) {
+      const tr = document.createElement('tr');
+      for (const c of allCols) {
+        const td = document.createElement('td');
+        td.textContent = r[c];
+        const v = num(r[c]);
+        if (cols.includes(c)) {
+          if (v == null) td.className = 'bx-na';
+          else if (v === colMin[c]) td.className = 'bx-best';
+          else {
+            const span = colMax[c] - colMin[c] || 1;
+            const pct = Math.round(8 + 32 * (v - colMin[c]) / span);
+            td.style.background = `color-mix(in srgb, var(--color-bad) ${pct}%, transparent)`;
+          }
+        }
+        tr.append(td);
+      }
+      body.append(tr);
+    }
+
+    // small multiples: add every card first, draw after, so each chart
+    // measures its final grid width (not the width of a half-filled row)
+    multiples.textContent = '';
+    const pending = [];
+    for (const c of cols) {
+      const card = document.createElement('article');
+      card.className = 'bx-card';
+      card.id = `ds-${c.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+      const h = document.createElement('h3');
+      h.textContent = c;
+      const box = document.createElement('div');
+      box.className = 'bx-chart';
+      card.append(h, box);
+      multiples.append(card);
+      const its = rows.filter((r) => num(r[c]) != null).map((r) => ({
+        label: label(r), value: num(r[c]), color: color(r.system), opacity: r.vad === 'average' ? 0.5 : 1,
+        valueText: f2(num(r[c])), tip: [['system', r.system], ['VAD', r.vad], ['DER', r[c]]],
+      })).sort((a, b) => a.value - b.value);
+      pending.push([box, its]);
+    }
+    for (const [box, its] of pending) hbars(box, its, { empty: 'No results on this dataset.' });
+  }
+
+  // calcs
+  const vadId = mode === 'with_overlap' ? 'vad_delta_with' : 'vad_delta_skip';
+  const chartVad = document.getElementById('chart-vad');
+  const sv = dash.data(vadId);
+  if (!waiting(chartVad, sv)) {
+    hbars(chartVad, sv.data.map((d) => ({
+      label: model(d.system), value: d.delta, color: d.delta >= 0 ? color(d.system) : 'var(--cds-chart-muted)', opacity: 1,
+      valueText: fs2(d.delta), tip: [['system', d.system], ['tuned', f2(d.tuned)], ['average', f2(d.average)], ['datasets', d.sets]],
+    })).sort((a, b) => b.value - a.value), { empty: 'No system has both VAD variants yet.' });
+  }
+
+  const chartOv = document.getElementById('chart-overlap');
+  const so = dash.data('overlap_cost');
+  if (!waiting(chartOv, so)) {
+    hbars(chartOv, so.data.map((d) => ({
+      label: d.vad === '-' ? model(d.system) : `${model(d.system)} · ${d.vad}`, value: d.cost, color: color(d.system),
+      opacity: d.vad === 'average' ? 0.5 : 1, valueText: fs2(d.cost),
+      tip: [['system', d.system], ['VAD', d.vad], ['with overlap', f2(d.with)], ['overlap skipped', f2(d.skipped)], ['datasets', d.sets]],
+    })).sort((a, b) => b.value - a.value));
+  }
+}
+
+for (const b of document.querySelectorAll('.bx-toggle button')) {
+  b.addEventListener('click', () => { mode = b.dataset.mode; draw(); });
+}
+dash.onData(draw);
+</script>
+</body>
+</html>

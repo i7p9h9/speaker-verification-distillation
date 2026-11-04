@@ -90,6 +90,21 @@ def get_filterbanks(
     return np.vstack([np.zeros((1, nfilt)), mel_weights_matrix])[:, :].astype("float32")
 
 
+class ResNetTF2Output(tp.NamedTuple):
+    """ECAPA2 outputs.
+
+    Attributes:
+        embedding: Utterance-level speaker embedding of shape ``(B, D)``.
+        attention: Frame-level VAD logits of shape ``(B, T)``. These are the
+            channel-average pre-softmax attention scores from equation (5) of
+            Thienpondt and Demuynck (Odyssey 2024).
+    """
+
+    embedding: torch.Tensor
+    attention: torch.Tensor
+    embeddings_frames: torch.Tensor | None = None
+
+
 class SpectralFeaturesTF(nn.Module):
     def __init__(
         self,
@@ -861,7 +876,7 @@ class SelfAttentionTF(nn.Module):
             bias=True,
         )
 
-    def forward(self, inputs):
+    def forward(self, inputs, is_return_attention=False):
         original_x = inputs
         # handle add_context
         if self.add_context:
@@ -899,6 +914,13 @@ class SelfAttentionTF(nn.Module):
             else:
                 output = (inputs_for_stats * weights).sum(dim=2)
 
+        if is_return_attention:
+            return ResNetTF2Output(
+                embedding=output,
+                attention=x,
+                embeddings_frames=inputs_for_stats
+            )
+
         return output
 
 
@@ -922,7 +944,7 @@ class ResNetTF(nn.Module):
             "fft_mode": "abs",
             "shift_value": 0.0,
             "normalize_spectrogram": True,
-            "return_img": True,
+            # "return_img": True,
         },
         backbone_cfg={
             "init_conv_params": {"in_channels": 1, "out_channels": 128, "stride": 1, "kernel_size": 3, "padding": 1},
@@ -942,7 +964,7 @@ class ResNetTF(nn.Module):
         post_pool_dims=3072 * 2,
         embedding_size=256,
         bn_eps=1e-3,
-        use_feats=True
+        use_feats=True,
     ):
         super(ResNetTF, self).__init__()
         if use_feats:
@@ -954,16 +976,23 @@ class ResNetTF(nn.Module):
         self.pooling = eval(pooling_type)(**pooling_cfg)
         self.head = nn.Sequential(nn.Linear(post_pool_dims, embedding_size), nn.BatchNorm1d(embedding_size, eps=bn_eps))
 
-    def forward(self, x):
+    def forward(self, x, is_return_attention=False):
         if self.features is not None:
             h = self.features(x)
         else:
             h = x.unsqueeze(1)
         h = self.backbone(h)
         h = self.pre_pool(h)
-        h = self.pooling(h)
-        emb = self.head(h)
-        return emb
+        h = self.pooling(h, is_return_attention=is_return_attention)
+        if is_return_attention:
+            return ResNetTF2Output(
+                embedding=self.head(h.embedding),
+                attention=h.attention,
+                embeddings_frames=h.embeddings_frames
+            )
+        else:
+            emb = self.head(h)
+            return emb
 
 
 # --------------------------------
@@ -1096,6 +1125,7 @@ class ResNetTFSubNetS(nn.Module):
 
         if backbone_exp_dir_ep:
             from wespeaker.utils.utils import load_experiment_or_asset_model
+
             self.backbone_model = freeze_model(load_experiment_or_asset_model(*backbone_exp_dir_ep).eval())
         else:
             assert backbone is not None

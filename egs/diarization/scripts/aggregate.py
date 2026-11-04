@@ -7,10 +7,11 @@ Reads every tagged line of ``<bench>/nemotron/<Dataset>/results.tsv`` and
 system, VAD variant, set and scoring) and prints two tables of ``--metric`` at
 ``--collar``: with the overlap regions and without them (--skip-overlap
 scoring).  A row is a system with its VAD variant (tuned: each dataset's own
-Silero thresholds, average: the mean ones), a column a dataset (``Dataset/set``
-for datasets with several sets); ``mean`` averages the columns, over the ones
-the row has (their number in brackets when some are missing).  Also written to
-``<out-dir>/summary.tsv`` and ``summary-skip-overlap.tsv`` (default: the bench dir).
+Silero thresholds, average: the mean ones, oracle: the reference speech), a
+column a dataset (``Dataset/set`` for datasets with several sets); ``mean``
+averages the columns, over the ones the row has (their number in brackets when
+some are missing).  Also written to ``<out-dir>/summary.tsv`` and
+``summary-skip-overlap.tsv`` (default: the bench dir).
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from benchmark import read_datasets  # noqa: E402
 
 METRICS = ("DER", "MS", "FA", "SC", "VAD", "VAD_MS", "VAD_FA")
 RECIPE_ORDER = {"nemotron": 0, "ecapa": 1, "vbx": 2}
-VARIANT_ORDER = {"nemotron": 0, "tuned": 1, "average": 2}
+VARIANT_ORDER = {"nemotron": 0, "oracle": 1, "tuned": 2, "average": 3}
 
 Key = tp.Tuple[str, str, str, str, str]  # system, variant, dataset, set, scoring
 

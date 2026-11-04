@@ -403,6 +403,26 @@ class HybridEncoder(nn.Module):
         return h, aux
 
 
+class AttentiveStatsPooling(nn.Module):
+    """Channel-wise attentive statistics pooling (ECAPA-TDNN): ``(B, T, D) -> (B, 2D)``.
+
+    Each channel gets its own softmax over the frames, so the frames that carry
+    the speaker (late ones, with the most context under causal attention;
+    voiced ones) outweigh the rest.
+    """
+
+    def __init__(self, d_model: int, hidden: int = 128) -> None:
+        super().__init__()
+        self.score = nn.Sequential(nn.Linear(d_model, hidden), nn.Tanh(), nn.Linear(hidden, d_model))
+
+    def forward(self, h: Tensor) -> Tensor:
+        h = h.float()
+        w = self.score(h).softmax(dim=1)
+        mean = (w * h).sum(dim=1)
+        std = ((w * h.square()).sum(dim=1) - mean.square()).clamp_min(1e-5).sqrt()
+        return torch.cat([mean, std], dim=-1)
+
+
 class StreamingSpeakerEncoder(nn.Module):
     """Frontend -> stem -> causal encoder -> pooling -> BatchNorm -> embedding.
 
@@ -414,10 +434,14 @@ class StreamingSpeakerEncoder(nn.Module):
     ``stem="conv"`` is :class:`CausalConvStem` (``subsampling`` divides the frame
     rate), ``"fast"`` :class:`FastConformerSubsampling` (``subsampling`` 2, 4
     or 8), ``"linear"`` a per-frame projection.  ``pooling="stats"`` takes the
-    mean and std of the frames, ``"mean"`` the mean only.  The BatchNorm after
-    the pooling removes the component shared by all utterances: without it the
-    mean of the (LayerNorm-ed) frames is nearly the same vector for every input
-    and the embedding collapses (pairwise cosine ~0.6-0.8 at init vs ~0 here).
+    mean and std of the frames, ``"mean"`` the mean only, ``"attentive"`` the
+    mean and std weighted by :class:`AttentiveStatsPooling`, ``"last"`` the last
+    frame, the only one that has seen the whole input.  All of them can be kept
+    up to date frame by frame (``"attentive"`` with a running softmax).  The
+    BatchNorm after the pooling removes the component shared by all utterances:
+    without it the mean of the (LayerNorm-ed) frames is nearly the same vector
+    for every input and the embedding collapses (pairwise cosine ~0.6-0.8 at
+    init vs ~0 here).
 
     ``forward`` returns the embedding ``(B, embed_dim)``, the usual backbone
     interface; ``return_frames=True`` returns :class:`StreamingSpeakerOutput`.
@@ -440,7 +464,7 @@ class StreamingSpeakerEncoder(nn.Module):
         use_feats: bool = True,
         stem: tp.Literal["conv", "fast", "linear"] = "conv",
         subsampling: int = 1,
-        pooling: tp.Literal["stats", "mean"] = "stats",
+        pooling: tp.Literal["stats", "mean", "attentive", "last"] = "stats",
     ) -> None:
         super().__init__()
         spec_params = {} if spec_params is None else dict(spec_params)
@@ -482,10 +506,11 @@ class StreamingSpeakerEncoder(nn.Module):
         else:
             raise ValueError(f"unsupported stem: {stem!r}")
         self.encoder = encoder
-        if pooling not in ("stats", "mean"):
+        if pooling not in ("stats", "mean", "attentive", "last"):
             raise ValueError(f"unsupported pooling: {pooling!r}")
         self.pooling = pooling
-        pooled_dim = d_model * (2 if pooling == "stats" else 1)
+        self.attention = AttentiveStatsPooling(d_model) if pooling == "attentive" else None
+        pooled_dim = d_model * (2 if pooling in ("stats", "attentive") else 1)
         self.pool_norm = nn.BatchNorm1d(pooled_dim)
         self.embedding = nn.Linear(pooled_dim, embed_dim)
         self.apply(_init_weights)
@@ -511,9 +536,14 @@ class StreamingSpeakerEncoder(nn.Module):
         return_frames: bool = False,
     ) -> StreamingSpeakerOutput | Tensor:
         h, aux = self.encoder(self.input_proj(self._prepare_input(x)), offset)
-        pooled = h.mean(dim=1)
-        if self.pooling == "stats":
-            pooled = torch.cat([pooled, h.float().var(dim=1).clamp_min(1e-5).sqrt().to(h.dtype)], dim=-1)
+        if self.attention is not None:
+            pooled = self.attention(h)
+        elif self.pooling == "last":
+            pooled = h[:, -1]
+        else:
+            pooled = h.mean(dim=1)
+            if self.pooling == "stats":
+                pooled = torch.cat([pooled, h.float().var(dim=1).clamp_min(1e-5).sqrt().to(h.dtype)], dim=-1)
         embedding = self.embedding(self.pool_norm(pooled))
         if not return_frames:
             return embedding
@@ -619,6 +649,7 @@ def FastConformerTSCOSpeaker(
 
 
 __all__ = [
+    "AttentiveStatsPooling",
     "ConformerBlock",
     "FastConformerRoPESpeaker",
     "FastConformerSubsampling",

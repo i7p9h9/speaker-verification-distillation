@@ -78,9 +78,7 @@ class LocalFeatureExtractorBlock(nn.Module):
         if stride[1] != 1:
             raise ValueError("ECAPA2 must preserve the temporal resolution in its LFE")
 
-        self.position = (
-            nn.Parameter(torch.zeros(1, 1, num_frequencies, 1)) if frequency_encoding else None
-        )
+        self.position = nn.Parameter(torch.zeros(1, 1, num_frequencies, 1)) if frequency_encoding else None
         self.body = nn.Sequential(
             Conv2dReluBn(in_channels, out_channels, stride=stride),
             Conv2dReluBn(out_channels, out_channels),
@@ -193,9 +191,7 @@ class Res2Conv1d(nn.Module):
             raise ValueError(f"channels ({channels}) must be divisible by scale ({scale})")
         self.scale = scale
         width = channels // scale
-        self.convs = nn.ModuleList(
-            [nn.Conv1d(width, width, 3, dilation=dilation) for _ in range(scale - 1)]
-        )
+        self.convs = nn.ModuleList([nn.Conv1d(width, width, 3, dilation=dilation) for _ in range(scale - 1)])
         self.norms = nn.ModuleList([nn.BatchNorm1d(width) for _ in range(scale - 1)])
         self.padding = dilation
 
@@ -262,31 +258,54 @@ class GlobalFeatureExtractor(nn.Module):
 
 
 class ChannelDependentAttentiveStatisticsPooling(nn.Module):
-    """CAS pooling with access to its pre-softmax channel attention scores."""
+    """CAS pooling with access to its pre-softmax channel attention scores.
 
-    def __init__(self, channels: int, hidden_channels: int = 128, eps: float = 1e-5) -> None:
+    With ``global_context`` the attention sees ``[x, mean(x), std(x)]`` over time,
+    as in the original ECAPA-TDNN/ECAPA2 pooling; the scores then depend on the
+    whole input.  Without it they depend on the current frame only.
+
+    With ``channel_dependent=False`` the attention produces a single score
+    ``e_t`` per frame (the "simplest form" of attentive pooling), and the one
+    temporal softmax weights all channels; the logits then have shape ``(B, 1, T)``.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        hidden_channels: int = 128,
+        eps: float = 1e-5,
+        is_use_std_pool: bool = True,
+        global_context: bool = False,
+        channel_dependent: bool = True,
+    ) -> None:
         super().__init__()
+        self._is_use_std_pool = is_use_std_pool
+        self.global_context = global_context
+
         self.eps = eps
         self.attention = nn.Sequential(
-            nn.Conv1d(channels, hidden_channels, 1),
+            nn.Conv1d(channels * 3 if global_context else channels, hidden_channels, 1),
             nn.ReLU(),
             nn.BatchNorm1d(hidden_channels),
-            nn.Conv1d(hidden_channels, channels, 1),
+            nn.Conv1d(hidden_channels, channels if channel_dependent else 1, 1),
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # time = x.shape[-1]
-        # mean = x.mean(dim=-1, keepdim=True).expand(-1, -1, time)
-        # std = x.var(dim=-1, keepdim=True, unbiased=False).add(self.eps).sqrt()
-        # std = std.expand(-1, -1, time)
-
-        # attention_logits = self.attention(torch.cat((x, mean, std), dim=1))
-        attention_logits = self.attention(x)
+        if self.global_context:
+            mean = x.mean(dim=-1, keepdim=True).expand_as(x)
+            std = x.var(dim=-1, keepdim=True).add(self.eps).sqrt().expand_as(x)
+            attention_logits = self.attention(torch.cat((x, mean, std), dim=1))
+        else:
+            attention_logits = self.attention(x)
         weights = attention_logits.softmax(dim=-1)
         attentive_mean = (weights * x).sum(dim=-1)
-        second_moment = (weights * x.square()).sum(dim=-1)
-        attentive_std = (second_moment - attentive_mean.square()).clamp_min(self.eps).sqrt()
-        return torch.cat((attentive_mean, attentive_std), dim=1), attention_logits
+
+        if self._is_use_std_pool:
+            second_moment = (weights * x.square()).sum(dim=-1)
+            attentive_std = (second_moment - attentive_mean.square()).clamp_min(self.eps).sqrt()
+            return torch.cat((attentive_mean, attentive_std), dim=1), attention_logits
+        else:
+            return attentive_mean, attention_logits
 
 
 __all__ = [

@@ -1,6 +1,6 @@
 """Benchmark of the diarization systems on all datasets of ``datasets.tsv``.
 
-    benchmark.py STAGE [STAGE ...] [--bench-dir DIR] [--datasets a,b] [--vad tuned|average]
+    benchmark.py STAGE [STAGE ...] [--bench-dir DIR] [--datasets a,b] [--vad tuned|average|oracle]
                  [--ecapa-models a,b] [--vbx-models a,b] [--skip-failed]
 
 Stages, in the order they are given:
@@ -16,7 +16,8 @@ Stages, in the order they are given:
     vbx       every --vbx-models preset on every set with the Silero VAD of --vad
 
 ``--vad tuned`` takes each dataset's own thresholds, ``--vad average`` the mean
-ones for all.  ecapa and vbx run through ``<recipe>/scripts/run-<key>.sh``
+ones for all, ``--vad oracle`` the speech of the reference instead of Silero
+(the upper bound; vbx extracts the embeddings again for it).  ecapa and vbx run through ``<recipe>/scripts/run-<key>.sh``
 (dataset preparation, default rates and caching as there) into
 <bench>/<recipe>/<model>/, tagged with the VAD variant, and are scored twice:
 with and without (--skip-overlap) the overlap regions.  The ecapa extraction
@@ -30,6 +31,7 @@ to <bench>/logs/; a failed run stops the benchmark unless
     benchmark.py nemotron
     benchmark.py silero tune ecapa vbx --vad tuned
     benchmark.py average ecapa vbx --vad average
+    benchmark.py ecapa vbx --vad oracle
     aggregate.py
 """
 
@@ -108,7 +110,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("stages", nargs="+", choices=STAGES)
     p.add_argument("--bench-dir", type=Path, default=None, help="default: benchmark.dir of the config")
     p.add_argument("--datasets", default=",".join(datasets), help="keys of datasets.tsv")
-    p.add_argument("--vad", choices=["tuned", "average"], default="tuned", help="ecapa, vbx: Silero thresholds")
+    p.add_argument("--vad", choices=["tuned", "average", "oracle"], default="tuned",
+                   help="ecapa, vbx: Silero thresholds, or the reference speech")
     p.add_argument("--ecapa-models", default=",".join(ecapa), help="subset of benchmark.ecapa_models")
     p.add_argument("--vbx-models", default=",".join(vbx), help="subset of benchmark.vbx_models")
     p.add_argument("--tune-fraction", type=float, default=1.0)
@@ -261,6 +264,8 @@ def stage_average(args: argparse.Namespace) -> None:
 
 
 def vad_options(args: argparse.Namespace, ds: Dataset) -> tp.List[str]:
+    if args.vad == "oracle":
+        return ["--oracle-vad"]
     path = vad_json(args, "average" if args.vad == "average" else ds.name)
     if not path.exists():
         raise SystemExit(f"no {path}, run the {'average' if args.vad == 'average' else 'tune'} stage")

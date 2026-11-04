@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing as mp
+import os
 import typing as tp
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +66,8 @@ def silero_file(wav: Path, out: Path) -> None:
     tmp = out.with_suffix(".npz.tmp")
     with open(tmp, "wb") as f:
         np.savez(f, segments=segments, prob=prob.astype(np.float32), prob_shift=np.float32(512 / 16000))
+        f.flush()
+        os.fsync(f.fileno())
     tmp.replace(out)
 
 
@@ -71,8 +75,22 @@ def _job(paths: tp.Tuple[Path, Path]) -> None:
     silero_file(*paths)
 
 
+def drop_broken(out_dir: Path) -> tp.List[Path]:
+    """Delete the ``.npz`` under ``out_dir`` that are not complete zip files (e.g.
+    empty after a crash) and return them, so the caches compute them again."""
+    broken = [p for p in sorted(out_dir.rglob("*.npz")) if not zipfile.is_zipfile(p)]
+    for p in broken:
+        p.unlink()
+    if broken:
+        names = " ".join(p.stem for p in broken[:5]) + " ..." * (len(broken) > 5)
+        print(f"{out_dir}: {len(broken)} broken .npz deleted: {names}", flush=True)
+    return broken
+
+
 def pending(wav_dir: Path, out_dir: Path, ext: str = ".wav") -> tp.List[tp.Tuple[Path, Path]]:
-    """``(wav, out)`` pairs without a cached result."""
+    """``(wav, out)`` pairs without a cached result (broken ones are deleted)."""
+    if out_dir.is_dir():
+        drop_broken(out_dir)
     pairs = [(w, (out_dir / w.relative_to(wav_dir)).with_suffix(".npz")) for w in sorted(wav_dir.rglob(f"*{ext}"))]
     return [(w, o) for w, o in pairs if not o.exists()]
 
