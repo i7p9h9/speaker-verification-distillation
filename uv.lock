@@ -153,7 +153,7 @@ wheels = [
 [[package]]
 name = "audimentation"
 version = "0.0.1"
-source = { editable = "../audiment" }
+source = { editable = "audiment" }
 
 [[package]]
 name = "audioread"

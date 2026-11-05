@@ -72,6 +72,53 @@ def get_asv_spoof_17(
     )
 
 
+def get_asv_spoof_17_holdout(
+    dir_main: str,
+    reader: AudioReaderBase,
+    fraction: float = 0.2,
+    subset: str = "val",
+    limit_spoof: tp.Optional[int] = None,
+    limit_live: tp.Optional[int] = None,
+    seed: int = 42,
+) -> SpoofLiveDatasets:
+    """
+    Load a deterministic, class-stratified split of ASVspoof 2017.
+
+    ``live`` and ``replay`` files are split independently, so both subsets keep
+    the original live/replay ratio. The split depends only on *seed* and the
+    contents of ``meta.csv`` — the same call always yields the same files, and
+    ``subset="val"`` / ``subset="train"`` never overlap.
+
+    Args:
+        dir_main: Root directory (contains ``meta.csv`` and ``eval/``).
+        reader:   AudioReaderBase instance shared by both sub-datasets.
+        fraction: Share of files (per class) that goes to the ``val`` subset.
+        subset:   ``"val"`` (the *fraction* part) or ``"train"`` (the rest).
+        limit_spoof / limit_live: Optional caps applied after the split.
+        seed:     Seed for the split and for the optional sampling.
+    """
+    if subset not in ("val", "train"):
+        raise ValueError(f"subset must be 'val' or 'train', got {subset!r}")
+    if not 0.0 < fraction < 1.0:
+        raise ValueError(f"fraction must be in (0, 1), got {fraction}")
+
+    full = get_asv_spoof_17(dir_main, reader, seed=seed)
+
+    def _split(paths: tp.List[str]) -> tp.List[str]:
+        paths = sorted(paths)
+        random.Random(seed).shuffle(paths)
+        n_val = max(1, round(len(paths) * fraction))
+        return paths[:n_val] if subset == "val" else paths[n_val:]
+
+    live_paths = _sample(_split(full.dataset_live.wav_list), limit_live, seed)
+    spoof_paths = _sample(_split(full.dataset_spoof.wav_list), limit_spoof, seed)
+
+    return SpoofLiveDatasets(
+        dataset_live=WavDataset(live_paths, reader),
+        dataset_spoof=WavDataset(spoof_paths, reader),
+    )
+
+
 def get_asv_spoof_19(
     dir_wav: str,
     file_meta: str,
