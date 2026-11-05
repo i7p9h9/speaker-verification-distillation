@@ -15,6 +15,7 @@ dependencies = [
     "librosa>=0.10.2,<0.12",
     "lightning>=2.5,<2.6",
     "matplotlib>=3.9,<4",
+    "minlora",
     "numba>=0.68.0",
     "numpy>=1.26,<3",
     "onnx>=1.23.2",
@@ -40,6 +41,7 @@ dependencies = [
 torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
 torchaudio = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
 audimentation = { path = "../audiment", editable = true }
+minlora = { git = "https://github.com/cccntu/minLoRA.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

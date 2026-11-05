@@ -32,12 +32,13 @@ def collate_batch_segments_fn(
             audio_seg, target = item
             all_targets.append(target)
         else:
-            audio_seg: AudioSegments = item.sample
+            # LabeledSample-like wrapper (has .sample) or a bare AudioSegments (e.g. from WavDataset)
+            audio_seg: AudioSegments = item.sample if hasattr(item, "sample") else item
 
         all_segments.append(audio_seg.segments)
         all_weights.extend(audio_seg.segments_weights)
         all_segment_to_sample.extend([sample_idx] * audio_seg.segments.shape[0])
-        all_dataset_names.append(item.dataset_name)
+        all_dataset_names.append(getattr(item, "dataset_name", ""))
 
     return BatchSegments(
         segments=torch.from_numpy(np.concatenate(all_segments, axis=0)),

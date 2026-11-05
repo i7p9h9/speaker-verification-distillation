@@ -119,6 +119,64 @@ def get_asv_spoof_17_holdout(
     )
 
 
+def get_remasc(
+    dir_main: str,
+    reader: AudioReaderBase,
+    limit_spoof: tp.Optional[int] = None,
+    limit_live: tp.Optional[int] = None,
+    seed: int = 42,
+) -> SpoofLiveDatasets:
+    """
+    Load the ReMASC replay-attack corpus.
+
+    Expected layout::
+
+        dir_main/
+            meta.csv          # header: path,type,spk,env,source_recording_device,
+                              #         playback_device,recording_device,file_length
+            eval/
+                1010101.wav
+                ...
+
+    ``type`` is one of ``source`` / ``genuine`` / ``replayed``:
+
+    * ``genuine``  -> live (bonafide recording of a real speaker);
+    * ``replayed`` -> spoof (replay attack);
+    * ``source``   -> skipped (the original recordings that are played back to
+      make the replays; they are neither a genuine access nor an attack).
+
+    Args:
+        dir_main:    Root directory of the dataset.
+        reader:      AudioReaderBase instance shared by both sub-datasets.
+        limit_spoof: Maximum number of replayed files to include (None = all).
+        limit_live:  Maximum number of genuine files to include (None = all).
+        seed:        Random seed used when sampling is needed.
+
+    Returns:
+        SpoofLiveDatasets with .dataset_live and .dataset_spoof.
+    """
+    meta_path = Path(dir_main) / "meta.csv"
+    live_paths: tp.List[str] = []
+    spoof_paths: tp.List[str] = []
+
+    with open(meta_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            kind = row["type"].strip().lower()
+            full_path = str(Path(dir_main) / row["path"])
+            if kind == "genuine":
+                live_paths.append(full_path)
+            elif kind == "replayed":
+                spoof_paths.append(full_path)
+
+    live_paths = _sample(live_paths, limit_live, seed)
+    spoof_paths = _sample(spoof_paths, limit_spoof, seed)
+
+    return SpoofLiveDatasets(
+        dataset_live=WavDataset(live_paths, reader),
+        dataset_spoof=WavDataset(spoof_paths, reader),
+    )
+
+
 def get_asv_spoof_19(
     dir_wav: str,
     file_meta: str,

@@ -3,14 +3,14 @@
 Based on ``train-antispoof.py``: same data pipeline, loss weighting strategy and
 AM-Softmax head. What differs:
 
-  * backbone  - pretrained USAD 2.0 encoder (HF ``MIT-SLS/USAD2-{Small,Base}``),
+  * backbone  - pretrained USAD 2.0 encoder (local fairseq ``usad2_{small,base}.pt``, vendored code in ``voicesdk.nn.arch.usad``),
                 frozen, adapted only through LoRA on its Linear layers;
   * trainable - LoRA matrices + layer-weights + pooling projection + AM head;
-  * validation - 20% hold-out split of ASVspoof 2017 (``meta.csv`` + ``eval/``).
+  * validation - 20% hold-out split of ASVspoof 2017 and (optional) ReMASC, EER for each.
 
 Usage::
 
-    python train-antispoof-usad.py --model base  --asv17-dir /path/to/ASV17_eval
+    python train-antispoof-usad.py --model base  --asv17-dir /path/to/ASV17_eval --remasc-dir /path/to/ReMASC
     python train-antispoof-usad.py --model small --lora-rank 16 --lora-alpha 32
 """
 
@@ -29,9 +29,8 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
-from transformers import AutoModel
 from validation import AggregatedAntiSpoofingValidator, AntiSpoofingValidator, VoxDataset
-from validation.utils.get_spoof_datasets import get_asv_spoof_17_holdout
+from validation.utils.get_spoof_datasets import get_asv_spoof_17_holdout, get_remasc
 
 from voicesdk.dataset import (
     LabeledAggregatedDataset,
@@ -47,6 +46,7 @@ from voicesdk.distillation.data import (
     collate_batch_segments_fn,
 )
 from voicesdk.distillation.training.trainer_antispoof import AntispoofLightningModule, WeightLogger
+from voicesdk.nn.arch.usad import UsadModel
 from voicesdk.nn.loss import AMSoftmaxLoss
 from voicesdk.utils.find_files import find_files_recursive
 
@@ -54,9 +54,11 @@ from voicesdk.utils.find_files import find_files_recursive
 # Config (defaults; most of them can be overridden from the CLI, see parse_args)
 # ---------------------------------------------------------------------------
 
-USAD_MODELS: tp.Dict[str, str] = {
-    "small": "MIT-SLS/USAD2-Small",
-    "base": "MIT-SLS/USAD2-Base",
+# size -> (encoder_dim, default local checkpoint). Checkpoints are the fairseq ``usad2_*.pt`` files from
+# https://github.com/vectominist/usad/tree/main/usad_inference#download-checkpoints
+USAD_MODELS: tp.Dict[str, tp.Tuple[int, str]] = {
+    "small": (384, "data/pretrained/usad2_small.pt"),
+    "base": (768, "data/pretrained/usad2_base.pt"),
 }
 
 # Linear layers inside the Conformer blocks that receive LoRA (substring match on module name).
@@ -124,6 +126,16 @@ def disable_native_triton_ops_without_compiler() -> None:
 # ---------------------------------------------------------------------------
 
 
+def load_usad(ckpt_path: str, expected_dim: int) -> UsadModel:
+    """Load a USAD 2.0 encoder from a local fairseq checkpoint (vendored ``voicesdk.nn.arch.usad``)."""
+    if not Path(ckpt_path).is_file():
+        raise FileNotFoundError(f"USAD checkpoint not found: {ckpt_path} (set --usad-ckpt)")
+    model = UsadModel.load_from_fairseq_ckpt(ckpt_path)
+    if model.encoder_dim != expected_dim:
+        raise ValueError(f"{ckpt_path}: encoder_dim={model.encoder_dim}, expected {expected_dim} for this --model")
+    return model
+
+
 class UsadBackbone(nn.Module):
     """USAD 2.0 encoder -> utterance embedding ``(B, embedding_dim)``.
 
@@ -136,7 +148,8 @@ class UsadBackbone(nn.Module):
 
     def __init__(
         self,
-        hf_name: str,
+        ckpt_path: str,
+        expected_dim: int,
         embedding_dim: int,
         lora_rank: int,
         lora_alpha: float,
@@ -144,7 +157,7 @@ class UsadBackbone(nn.Module):
         lora_targets: tp.Sequence[str],
     ) -> None:
         super().__init__()
-        self.usad = AutoModel.from_pretrained(hf_name, trust_remote_code=True)
+        self.usad = load_usad(ckpt_path, expected_dim)
         self.num_layers: int = self.usad.num_layers
         dim: int = self.usad.encoder_dim
 
@@ -210,7 +223,8 @@ def trainable_state_dict(module: nn.Module) -> tp.Dict[str, torch.Tensor]:
 
 def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]:
     backbone = UsadBackbone(
-        hf_name=USAD_MODELS[args.model],
+        ckpt_path=args.usad_ckpt or USAD_MODELS[args.model][1],
+        expected_dim=USAD_MODELS[args.model][0],
         embedding_dim=args.embedding_dim,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -228,7 +242,7 @@ def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]
     n_train = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
     n_head = sum(p.numel() for p in am_loss.parameters())
     print(
-        f"[model] {USAD_MODELS[args.model]}: LoRA on {backbone.n_lora_layers} Linear layers "
+        f"[model] USAD2-{args.model} ({args.usad_ckpt or USAD_MODELS[args.model][1]}): LoRA on {backbone.n_lora_layers} Linear layers "
         f"(r={args.lora_rank}, alpha={args.lora_alpha}); trainable backbone {n_train / 1e6:.2f}M "
         f"/ {n_total / 1e6:.2f}M (+ AM head {n_head / 1e3:.1f}K)"
     )
@@ -283,7 +297,19 @@ def backup_script(log_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def get_validation(reader, asv17_dir: str, fraction: float, batch_size: int, num_workers: int, seed: int):
+def get_validation(
+    reader,
+    asv17_dir: str,
+    fraction: float,
+    batch_size: int,
+    num_workers: int,
+    seed: int,
+    remasc_dir: tp.Optional[str] = None,
+):
+    """Validators: 20% hold-out of ASVspoof 2017 and (optionally) the full ReMASC test set.
+
+    Every validator reports its own EER (``val/spoof-joined/per_validator/<name>/eer``).
+    """
     data_loader = partial(
         DataLoader,
         batch_size=batch_size,
@@ -293,22 +319,28 @@ def get_validation(reader, asv17_dir: str, fraction: float, batch_size: int, num
         shuffle=False,
         drop_last=False,
     )
-    datasets = get_asv_spoof_17_holdout(
-        dir_main=asv17_dir,
-        reader=reader,
-        fraction=fraction,
-        subset="val",
-        seed=seed,
-    )
-    n_live, n_spoof = len(datasets.dataset_live), len(datasets.dataset_spoof)
-    print(f"[ASVspoof17 val {fraction:.0%}] live: {n_live} | spoof: {n_spoof} | total: {n_live + n_spoof}")
 
-    validator = AntiSpoofingValidator(
-        name="asv_spoof_17",
-        bonafide_loader=data_loader(datasets.dataset_live),
-        spoof_loader=data_loader(datasets.dataset_spoof),
-    )
-    return AggregatedAntiSpoofingValidator(name="spoof-joined", validators=[validator], return_scores=False)
+    def make_validator(name: str, datasets) -> AntiSpoofingValidator:
+        n_live, n_spoof = len(datasets.dataset_live), len(datasets.dataset_spoof)
+        print(f"[{name}] live: {n_live} | spoof: {n_spoof} | total: {n_live + n_spoof}")
+        return AntiSpoofingValidator(
+            name=name,
+            bonafide_loader=data_loader(datasets.dataset_live),
+            spoof_loader=data_loader(datasets.dataset_spoof),
+        )
+
+    validators = [
+        make_validator(
+            "asv_spoof_17",
+            get_asv_spoof_17_holdout(
+                dir_main=asv17_dir, reader=reader, fraction=fraction, subset="val", seed=seed
+            ),
+        )
+    ]
+    if remasc_dir:
+        validators.append(make_validator("remasc", get_remasc(dir_main=remasc_dir, reader=reader, seed=seed)))
+
+    return AggregatedAntiSpoofingValidator(name="spoof-joined", validators=validators, return_scores=False)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +459,7 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", choices=sorted(USAD_MODELS), default="base", help="USAD 2.0 size")
+    p.add_argument("--usad-ckpt", default=None, help="local usad2_*.pt checkpoint (default: data/pretrained/usad2_<model>.pt)")
     p.add_argument("--embedding-dim", type=int, default=256)
 
     g = p.add_argument_group("LoRA (minLoRA)")
@@ -450,6 +483,7 @@ def parse_args() -> argparse.Namespace:
 
     g = p.add_argument_group("validation")
     g.add_argument("--asv17-dir", default=DIR_ASV_17, help="ASVspoof 2017 root (meta.csv + eval/)")
+    g.add_argument("--remasc-dir", default=None, help="ReMASC root (meta.csv + eval/); validator skipped if unset")
     g.add_argument("--val-fraction", type=float, default=0.2)
     g.add_argument("--val-batch-size", type=int, default=64)
     g.add_argument("--val-num-workers", type=int, default=2)
@@ -518,6 +552,7 @@ def main() -> None:
         batch_size=args.val_batch_size,
         num_workers=args.val_num_workers,
         seed=args.seed,
+        remasc_dir=args.remasc_dir,
     )
 
     # ---- lightning module ------------------------------------------------
@@ -538,7 +573,7 @@ def main() -> None:
     )
 
     # Checkpoints contain only trainable weights (see SaveAdapterCallback) -> load them non-strictly
-    # on resume; the frozen USAD weights come from the pretrained HF model.
+    # on resume; the frozen USAD weights come from the pretrained USAD checkpoint.
     module.strict_loading = False
 
     # ---- trainer ---------------------------------------------------------
