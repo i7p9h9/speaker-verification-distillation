@@ -18,6 +18,7 @@ import argparse
 import os
 import shutil
 import typing as tp
+from dataclasses import dataclass, field, fields
 from functools import partial
 from pathlib import Path
 
@@ -29,8 +30,8 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
-from validation import AggregatedAntiSpoofingValidator, AntiSpoofingValidator, VoxDataset
-from validation.utils.get_spoof_datasets import get_asv_spoof_17_holdout, get_remasc
+from validation import AggregatedAntiSpoofingValidator, AntiSpoofingValidator, GroupedAntiSpoofingValidator, VoxDataset
+from validation.utils.get_spoof_datasets import get_asv_spoof_17_holdout, get_playbackspoof, get_remasc
 
 from voicesdk.dataset import (
     LabeledAggregatedDataset,
@@ -56,9 +57,12 @@ from voicesdk.utils.find_files import find_files_recursive
 
 # size -> (encoder_dim, default local checkpoint). Checkpoints are the fairseq ``usad2_*.pt`` files from
 # https://github.com/vectominist/usad/tree/main/usad_inference#download-checkpoints
+# HuggingFace snapshots MIT-SLS/USAD2-{Small,Base}: <dir>/model.safetensors + <dir>/config.json
+DIR_PRETRAINED = "/media/shared/data/pretrained/usad2"
+
 USAD_MODELS: tp.Dict[str, tp.Tuple[int, str]] = {
-    "small": (384, "data/pretrained/usad2_small.pt"),
-    "base": (768, "data/pretrained/usad2_base.pt"),
+    "small": (384, f"{DIR_PRETRAINED}/small/model.safetensors"),
+    "base": (768, f"{DIR_PRETRAINED}/base/model.safetensors"),
 }
 
 # Linear layers inside the Conformer blocks that receive LoRA (substring match on module name).
@@ -70,38 +74,96 @@ NUM_CLASSES: int = 3  # 0 = bonafide, 1 = replay (LA), 2 = synthetic (DF)
 AM_SCALE: float = 20.0
 AM_MARGIN: float = 0.15
 
-# Dataset roots
-PATH_TRAIN_VOX1: str = "/media/ssd/voice/datasets/vox1/"
-PATH_TRAIN_VOX2: str = "/media/ssd/voice/datasets/vox2/dev-16k/aac/"
-PATH_TRAIN_SPGI: str = "/media/ssd/voice/datasets/spgispeech/"
-PATH_TRAIN_TIDY_1: str = "/media/ssd/voice/datasets/TidyVoiceX/"
-PATH_TRAIN_TIDY_2: str = "/media/ssd/voice/datasets/TidyVoiceX2/"
-PATH_TRAIN_VCTK: str = "/media/ssd/voice/datasets/vctk/"
-PATH_TRAIN_LIBRI: str = "/media/ssd/voice/datasets/librispeech/"
-PATH_TRAIN_MCV13: str = "/media/ssd/voice/datasets/mcv13"
-PATH_TRAIN_VOXTUBE: str = "/media/ssd/voice/datasets/voxtube"
-PATH_TRAIN_ASV21: str = "/media/ssd/voice/datasets/ASV21Eval"
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
 
-PATH_TRAIN_CN_CELEB: str = "/media/ssd/voice/datasets/cn-celeb_v2/CN-Celeb_wav-16k"
-PATH_TRAIN_LIVE_CML: str = "/media/ssd/voice/datasets/antispoof/live/cml"
+DIR_VERIF = "/media/shared/data/verification"
+DIR_SPOOF = "/media/shared/data/spoof"
 
-# Synthesis
-PATH_TRAIN_VC_TTS: str = "/media/ssd/voice/datasets/antispoof/vc_tts_engines-16k/data"
-PATH_SYN_TTS_COMMON: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/tts"
-PATH_SYN_VOCODERS_V1: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/vocoders-v1/train/synthes"
-PATH_SYN_VC_VOL1: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/voice_clones/train/synthes"
-PATH_SYN_VC_VOL2: str = "/media/ssd/voice/datasets/antispoof/synthesis-train/voice-clone-vol2/train"
+# Share of every PlaybackSpoof group used for validation (the full set is large and slow to evaluate).
+PLAYBACKSPOOF_FRACTION: float = 0.25
 
-# Dataset PAD
-PATH_PAD: str = "/media/ssd/voice/datasets/antispoof/replay/"
 
-# Augmentation
-DIR_RIR = Path("/media/ssd/voice/datasets/RIRs/RIRS_NOISES/")
-DIR_NOISE = Path("/media/ssd/voice/datasets/musan/")
+@dataclass(frozen=True)
+class LivePaths:
+    """Bonafide (label 0)."""
 
-# Validation: ASVspoof 2017 root with meta.csv (path,type,spk,phrase,env,playback_device,recording_device)
-# and the eval/ folder. Can be overridden with --asv17-dir.
-DIR_ASV_17: str = "/path/to/ASV17_eval"
+    vox1: str = f"{DIR_VERIF}/vox1/"
+    vox2: str = f"{DIR_VERIF}/vox2/dev-wav/aac/"
+    # spgi: str = f"{DIR_VERIF}/spgispeech/"  # disabled on purpose
+    tidy_1: str = f"{DIR_VERIF}/TidyVoice/TidyVoiceX_Train/"
+    tidy_2: str = f"{DIR_VERIF}/TidyVoice/TidyVoiceX2_ASV/"
+    vctk: str = f"{DIR_VERIF}/vctk/"
+    libri: str = f"{DIR_VERIF}/librispeech/"
+    mcv13: str = f"{DIR_VERIF}/mcv13"
+    voxtube: str = f"{DIR_VERIF}/voxtube"
+    asv21: str = f"{DIR_VERIF}/ASVspoof2021_DF_eval"
+    cn_celeb: str = f"{DIR_VERIF}/CN-Celeb_wav/data"
+    cml: str = f"{DIR_SPOOF}/live/cml"  # subfolder per source
+    hifi_tts: str = f"{DIR_SPOOF}/live/hi_fi_tts_v0"
+    playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/train/live/clean"  # .flac
+
+
+@dataclass(frozen=True)
+class ReplayPaths:
+    """Presentation attacks: recorded playback (label 1)."""
+
+    formanta: str = f"{DIR_SPOOF}/replay/data"
+    playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/train/spoof/replay"  # <HH|HL|LH|LL>/*.flac
+    # replayed TTS/VC: playback and re-recording, so it is a replay attack as well
+    playbackspoof_deep_fake: str = f"{DIR_SPOOF}/playbackspoof/audio/train/spoof/replay-deep-fake"  # .flac
+
+
+@dataclass(frozen=True)
+class DeepFakePaths:
+    """Synthetic speech without playback (label 2 for 3 classes)."""
+
+    tts_common: str = f"{DIR_SPOOF}/synthesis/tts"  # subfolder per engine
+    vc_tts: str = f"{DIR_SPOOF}/vc_tts_engines/"
+    vocoders_v1: str = f"{DIR_SPOOF}/synthesis/vocoders-v1/train/synthes"
+    vc_vol1: str = f"{DIR_SPOOF}/synthesis/voice_clones/train/synthes"
+    vc_vol2: str = f"{DIR_SPOOF}/synthesis/voice-clone-vol2/train"
+    playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/train/spoof/deep-fake"  # clean/*.flac
+
+
+@dataclass(frozen=True)
+class AugmentationPaths:
+    rir: str = f"{DIR_VERIF}/RIRs/RIRS_NOISES/"
+    noise: str = f"{DIR_VERIF}/musan/"
+
+
+@dataclass(frozen=True)
+class ValidationPaths:
+    # ASVspoof 2017 root: meta.csv (path,type,spk,phrase,env,playback_device,recording_device) + eval/
+    asv17: str = f"{DIR_SPOOF}/antispoof-testing/ASV17_eval"
+    # ReMASC root: meta.csv + eval/
+    remasc: str = f"{DIR_SPOOF}/antispoof-testing/ReMASC"
+    # PlaybackSpoof regrouped by egs/dataset-processing/regroup-playbackspoof.py (live/, spoof/...)
+    playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/validation"
+
+
+@dataclass(frozen=True)
+class PathsConfig:
+    live: LivePaths = field(default_factory=LivePaths)
+    replay: ReplayPaths = field(default_factory=ReplayPaths)
+    deep_fake: DeepFakePaths = field(default_factory=DeepFakePaths)
+    augmentation: AugmentationPaths = field(default_factory=AugmentationPaths)
+    validation: ValidationPaths = field(default_factory=ValidationPaths)
+
+    def items(self) -> tp.List[tp.Tuple[str, str]]:
+        """Flat ``("section.name", path)`` list."""
+        return [
+            (f"{section.name}.{leaf.name}", getattr(getattr(self, section.name), leaf.name))
+            for section in fields(self)
+            for leaf in fields(getattr(self, section.name))
+        ]
+
+    def missing(self) -> tp.List[tp.Tuple[str, str]]:
+        return [(key, path) for key, path in self.items() if not Path(path).is_dir()]
+
+
+PATHS = PathsConfig()
 
 
 def disable_native_triton_ops_without_compiler() -> None:
@@ -130,7 +192,10 @@ def load_usad(ckpt_path: str, expected_dim: int) -> UsadModel:
     """Load a USAD 2.0 encoder from a local fairseq checkpoint (vendored ``voicesdk.nn.arch.usad``)."""
     if not Path(ckpt_path).is_file():
         raise FileNotFoundError(f"USAD checkpoint not found: {ckpt_path} (set --usad-ckpt)")
-    model = UsadModel.load_from_fairseq_ckpt(ckpt_path)
+    if str(ckpt_path).endswith(".safetensors"):  # HuggingFace snapshot, config.json next to the weights
+        model = UsadModel.load_from_safetensors(ckpt_path)
+    else:  # original fairseq usad2_*.pt
+        model = UsadModel.load_from_fairseq_ckpt(ckpt_path)
     if model.encoder_dim != expected_dim:
         raise ValueError(f"{ckpt_path}: encoder_dim={model.encoder_dim}, expected {expected_dim} for this --model")
     return model
@@ -305,6 +370,8 @@ def get_validation(
     num_workers: int,
     seed: int,
     remasc_dir: tp.Optional[str] = None,
+    playbackspoof_dir: tp.Optional[str] = None,
+    playbackspoof_fraction: float = 1.0,
 ):
     """Validators: 20% hold-out of ASVspoof 2017 and (optionally) the full ReMASC test set.
 
@@ -340,7 +407,27 @@ def get_validation(
     if remasc_dir:
         validators.append(make_validator("remasc", get_remasc(dir_main=remasc_dir, reader=reader, seed=seed)))
 
-    return AggregatedAntiSpoofingValidator(name="spoof-joined", validators=validators, return_scores=False)
+    joined = AggregatedAntiSpoofingValidator(name="spoof-joined", validators=validators, return_scores=False)
+    if not playbackspoof_dir:
+        return [joined]
+
+    ps = get_playbackspoof(playbackspoof_dir, reader, fraction=playbackspoof_fraction, seed=seed)
+    print(
+        f"[playbackspoof] fraction={playbackspoof_fraction} | live: {len(ps.dataset_live)} | "
+        f"deep-fake: {len(ps.dataset_deep_fake)} | replay: {len(ps.dataset_replay)} | "
+        f"replay-deep-fake: {len(ps.dataset_replay_deep_fake)}"
+    )
+    # EER: live vs df | live vs replay | live vs replay-df | live vs pooled (per_validator/<group>/eer)
+    playbackspoof = GroupedAntiSpoofingValidator(
+        name="playbackspoof",
+        bonafide_loader=data_loader(ps.dataset_live),
+        spoof_loaders={
+            "deep-fake": data_loader(ps.dataset_deep_fake),
+            "replay": data_loader(ps.dataset_replay),
+            "replay-deep-fake": data_loader(ps.dataset_replay_deep_fake),
+        },
+    )
+    return [joined, playbackspoof]
 
 
 # ---------------------------------------------------------------------------
@@ -349,13 +436,13 @@ def get_validation(
 
 
 def build_augmentation_pipeline() -> SequentialCompose:
-    rir_provider_point = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "pointsource_noises", extension=".wav"))
-    rir_provider_real = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "real_rirs_isotropic_noises", extension=".wav"))
-    rir_provider_sim = FileListAudioProvider(paths=find_files_recursive(DIR_RIR / "simulated_rirs", extension=".wav"))
+    rir_provider_point = FileListAudioProvider(paths=find_files_recursive(Path(PATHS.augmentation.rir) / "pointsource_noises", extension=".wav"))
+    rir_provider_real = FileListAudioProvider(paths=find_files_recursive(Path(PATHS.augmentation.rir) / "real_rirs_isotropic_noises", extension=".wav"))
+    rir_provider_sim = FileListAudioProvider(paths=find_files_recursive(Path(PATHS.augmentation.rir) / "simulated_rirs", extension=".wav"))
 
-    noise_provider_music = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "music", extension=".wav"))
-    noise_provider_noise = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "noise", extension=".wav"))
-    noise_provider_speech = FileListAudioProvider(paths=find_files_recursive(DIR_NOISE / "speech", extension=".wav"))
+    noise_provider_music = FileListAudioProvider(paths=find_files_recursive(Path(PATHS.augmentation.noise) / "music", extension=".wav"))
+    noise_provider_noise = FileListAudioProvider(paths=find_files_recursive(Path(PATHS.augmentation.noise) / "noise", extension=".wav"))
+    noise_provider_speech = FileListAudioProvider(paths=find_files_recursive(Path(PATHS.augmentation.noise) / "speech", extension=".wav"))
 
     return SequentialCompose(
         stages=[
@@ -409,44 +496,52 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         ignore_empty=False,
     )
 
-    def single(root: str, label: int, weight: float, name: str) -> LabeledSource:
+    def single(root: str, label: int, weight: float, name: str, file_extension: str = "wav") -> LabeledSource:
         return LabeledSource(
-            dataset=[WeightedDataset(VoxDataset(reader=reader, root=root))],
+            dataset=[WeightedDataset(VoxDataset(reader=reader, root=root, file_extension=file_extension))],
             label=label,
             weight=weight,
             name=name,
         )
 
+    live, replay, df = PATHS.live, PATHS.replay, PATHS.deep_fake
+
     sources: tp.List[LabeledSource] = [
         # bonafide
-        single(PATH_TRAIN_VOX1, label_live, 6.0, "vox1"),
-        single(PATH_TRAIN_VOX2, label_live, 6.0, "vox2"),
-        single(PATH_TRAIN_SPGI, label_live, 2.0, "spgispeech"),
-        single(PATH_TRAIN_TIDY_1, label_live, 1.0, "tidy_voice_1"),
-        single(PATH_TRAIN_TIDY_2, label_live, 1.0, "tidy_voice_2"),
-        single(PATH_TRAIN_VCTK, label_live, 1.0, "VCTK"),
-        single(PATH_TRAIN_MCV13, label_live, 1.0, "MCV-13"),
-        single(PATH_TRAIN_VOXTUBE, label_live, 2.0, "voxtube"),
-        single(PATH_TRAIN_LIBRI, label_live, 3.0, "libri_speech"),
-        single(PATH_TRAIN_ASV21, label_live, 1.0, "asv-21"),
-        single(PATH_TRAIN_CN_CELEB, label_live, 1.0, "cn-celeb-v2"),
+        single(live.vox1, label_live, 6.0, "vox1"),
+        single(live.vox2, label_live, 6.0, "vox2"),
+        # single(live.spgi, label_live, 2.0, "spgispeech"),
+        single(live.tidy_1, label_live, 1.0, "tidy_voice_1"),
+        single(live.tidy_2, label_live, 1.0, "tidy_voice_2"),
+        single(live.vctk, label_live, 1.0, "VCTK"),
+        single(live.mcv13, label_live, 1.0, "MCV-13"),
+        single(live.voxtube, label_live, 2.0, "voxtube"),
+        single(live.libri, label_live, 3.0, "libri_speech"),
+        single(live.asv21, label_live, 1.0, "asv-21"),
+        single(live.cn_celeb, label_live, 1.0, "cn-celeb-v2"),
+        single(live.hifi_tts, label_live, 1.0, "hifi-tts"),
+        single(live.playbackspoof, label_live, 1.0, "playbackspoof-live", file_extension="flac"),
     ]
-    sources += create_live_source(root=PATH_TRAIN_LIVE_CML, label=label_live, source_weight=0.8, prefix="cml-")
+    sources += create_live_source(root=live.cml, label=label_live, source_weight=0.8, prefix="cml-")
 
     # spoof - LA (replay)
-    sources.append(single(f"{PATH_PAD}/voxceleb_toloka_replays_2026_02_15-16k", label_la, 4.0, "Replay-02-15"))
-    sources.append(single(f"{PATH_PAD}/voxceleb_toloka_replays_2026_02_21-16k", label_la, 4.0, "Replay-02-21"))
+    sources += [
+        single(replay.formanta, label_la, 4.0, "Replay-Formanta"),
+        single(replay.playbackspoof, label_la, 2.0, "playbackspoof-replay", file_extension="flac"),
+        single(replay.playbackspoof_deep_fake, label_la, 1.0, "playbackspoof-replay-deep-fake", file_extension="flac"),
+    ]
 
     # spoof - DF (synthetic)
     sources += create_spoof_source(
-        root=PATH_SYN_TTS_COMMON, label=label_df, source_weight=2.0, ignore_pattern="*tts_test_set*"
+        root=df.tts_common, label=label_df, source_weight=2.0, ignore_pattern="*tts_test_set*"
     )
-    sources += create_spoof_source(root=PATH_TRAIN_VC_TTS, label=label_df, source_weight=0.8)
-    sources += create_spoof_source(root=PATH_SYN_VOCODERS_V1, label=label_df, source_weight=1.2)
-    sources += create_spoof_source(root=PATH_SYN_VC_VOL1, label=label_df, source_weight=0.5)
+    sources += create_spoof_source(root=df.vc_tts, label=label_df, source_weight=0.8)
+    sources += create_spoof_source(root=df.vocoders_v1, label=label_df, source_weight=1.2)
+    sources += create_spoof_source(root=df.vc_vol1, label=label_df, source_weight=0.5)
     sources += create_spoof_source(
-        root=PATH_SYN_VC_VOL2, label=label_df, ignore_pattern="*resamble_denoiser*", source_weight=1.0
+        root=df.vc_vol2, label=label_df, ignore_pattern="*resamble_denoiser*", source_weight=1.0
     )
+    sources.append(single(df.playbackspoof, label_df, 1.0, "playbackspoof-deep-fake", file_extension="flac"))
 
     return LabeledAggregatedDataset(sources=sources, name="train_dataset")
 
@@ -459,7 +554,7 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", choices=sorted(USAD_MODELS), default="base", help="USAD 2.0 size")
-    p.add_argument("--usad-ckpt", default=None, help="local usad2_*.pt checkpoint (default: data/pretrained/usad2_<model>.pt)")
+    p.add_argument("--usad-ckpt", default=None, help="USAD2 weights: model.safetensors (+ config.json next to it) or fairseq usad2_*.pt (default: from USAD_MODELS)")
     p.add_argument("--embedding-dim", type=int, default=256)
 
     g = p.add_argument_group("LoRA (minLoRA)")
@@ -481,9 +576,25 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--precision", default="bf16-mixed")
     g.add_argument("--resume", default=None, help="Lightning checkpoint to resume from")
 
+
     g = p.add_argument_group("validation")
-    g.add_argument("--asv17-dir", default=DIR_ASV_17, help="ASVspoof 2017 root (meta.csv + eval/)")
-    g.add_argument("--remasc-dir", default=None, help="ReMASC root (meta.csv + eval/); validator skipped if unset")
+    g.add_argument("--asv17-dir", default=PATHS.validation.asv17, help="ASVspoof 2017 root (meta.csv + eval/)")
+    g.add_argument(
+        "--remasc-dir",
+        default=PATHS.validation.remasc,
+        help="ReMASC root (meta.csv + eval/); default from PATHS, pass an empty string to skip the validator",
+    )
+    g.add_argument(
+        "--playbackspoof-dir",
+        default=PATHS.validation.playbackspoof,
+        help="regrouped PlaybackSpoof root (live/, spoof/...); default from PATHS, pass an empty string to skip the validator",
+    )
+    g.add_argument(
+        "--playbackspoof-fraction",
+        type=float,
+        default=PLAYBACKSPOOF_FRACTION,
+        help="share of every PlaybackSpoof group used for validation, 1.0 = all",
+    )
     g.add_argument("--val-fraction", type=float, default=0.2)
     g.add_argument("--val-batch-size", type=int, default=64)
     g.add_argument("--val-num-workers", type=int, default=2)
@@ -545,7 +656,7 @@ def main() -> None:
     adapter_cb = SaveAdapterCallback(exp_dir / "adapter-last.pt")
 
     # ---- validation ------------------------------------------------------
-    validator = get_validation(
+    validators = get_validation(
         reader=reader_val,
         asv17_dir=args.asv17_dir,
         fraction=args.val_fraction,
@@ -553,6 +664,8 @@ def main() -> None:
         num_workers=args.val_num_workers,
         seed=args.seed,
         remasc_dir=args.remasc_dir,
+        playbackspoof_dir=args.playbackspoof_dir,
+        playbackspoof_fraction=args.playbackspoof_fraction,
     )
 
     # ---- lightning module ------------------------------------------------
@@ -561,7 +674,7 @@ def main() -> None:
         am_loss=am_loss,
         dataset=dataset_train,
         strategy=strategy,
-        validators=[validator],
+        validators=validators,
         weight_logger=weight_logger,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,

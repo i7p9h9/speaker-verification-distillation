@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Recursively copy a folder tree to an output directory:
-- Resample all .m4a to 16kHz mono WAV (same relative path, .wav extension)
+- Resample all .m4a/.flac/.wav to 16kHz mono (same relative path); output container is
+  chosen with --format: wav (PCM 16-bit, default) or ogg (Vorbis, fixed compression, see OGG_*)
 - Copy all other files as-is
 - Multiprocessing by default: workers = max(1, ncpu - 1)
 
@@ -10,7 +11,7 @@ Requires:
 And torchaudio must be built with sox (or have a working sox backend).
 
 Example:
-  python convert_tree_m4a_to_wav16k.py --input-dir /path/in --output-dir /path/out
+  python resample-dir.py --input-dir /path/in --output-dir /path/out [--format ogg]
 """
 
 from __future__ import annotations
@@ -25,11 +26,18 @@ from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from typing import Iterable, Tuple
 
+import soundfile as sf
 import torch
 import torchaudio
 
 
 TARGET_SR = 16_000
+
+# Fixed OGG settings (--format ogg): Vorbis, VBR. libsndfile maps compression_level to
+# quality = 1 - level, i.e. 0.4 -> quality 0.6 (higher level = smaller file / lower quality).
+OGG_FORMAT = "OGG"
+OGG_SUBTYPE = "VORBIS"
+OGG_COMPRESSION_LEVEL = 0.4
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,7 @@ class Job:
     dst: Path
     is_m4a: bool
     is_wav: bool
+    fmt: str = "wav"
 
 
 def _ensure_parent_dir(p: Path) -> None:
@@ -49,20 +58,36 @@ def _rel_dst_path(src: Path, input_root: Path, output_root: Path) -> Path:
     return output_root / rel
 
 
-def _make_jobs(input_root: Path, output_root: Path) -> list[Job]:
+def _make_jobs(input_root: Path, output_root: Path, fmt: str = "wav") -> list[Job]:
+    out_suffix = f".{fmt}"
     jobs: list[Job] = []
     for p in input_root.rglob("*"):
         if p.is_dir():
             continue
         dst = _rel_dst_path(p, input_root, output_root)
-        is_m4a = p.suffix.lower() == ".m4a"
-        is_flac = p.suffix.lower() == ".flac"
-        if is_m4a or is_flac:
-            dst = dst.with_suffix(".wav")
-        is_wav = p.suffix.lower() == ".wav"
+        suffix = p.suffix.lower()
+        is_m4a = suffix in (".m4a", ".flac")
+        is_wav = suffix == ".wav"
+        if is_m4a or is_wav:
+            dst = dst.with_suffix(out_suffix)
 
-        jobs.append(Job(src=p, dst=dst, is_m4a=is_m4a or is_flac, is_wav=is_wav))
+        jobs.append(Job(src=p, dst=dst, is_m4a=is_m4a, is_wav=is_wav, fmt=fmt))
     return jobs
+
+
+def _save(waveform: torch.Tensor, sr: int, dst: Path, fmt: str) -> None:
+    """Write mono [1, T] waveform as 16-bit PCM WAV or fixed-quality OGG Vorbis."""
+    if fmt == "ogg":
+        sf.write(
+            str(dst),
+            waveform.squeeze(0).numpy(),
+            sr,
+            format=OGG_FORMAT,
+            subtype=OGG_SUBTYPE,
+            compression_level=OGG_COMPRESSION_LEVEL,
+        )
+    else:
+        torchaudio.save(str(dst), waveform, sr, bits_per_sample=16)
 
 
 def _resample_to_16k_mono(waveform: torch.Tensor, sr: int) -> Tuple[torch.Tensor, int]:
@@ -89,6 +114,26 @@ def _resample_to_16k_mono(waveform: torch.Tensor, sr: int) -> Tuple[torch.Tensor
     return waveform, TARGET_SR
 
 
+class EmptyAudioError(Exception):
+    pass
+
+
+def _load(path: Path) -> Tuple[torch.Tensor, int]:
+    """Load as [C, T] float32. soundfile first (robust for wav/flac/ogg), torchaudio/torchcodec as fallback (m4a etc.)."""
+    try:
+        data, sr = sf.read(str(path), dtype="float32", always_2d=True)  # [T, C]
+        if data.shape[0] == 0:
+            raise EmptyAudioError(f"empty audio (0 samples): {path}")
+        return torch.from_numpy(data.T.copy()), sr
+    except EmptyAudioError:
+        raise
+    except Exception:
+        waveform, sr = torchaudio.load(str(path))
+        if waveform.shape[-1] == 0:
+            raise EmptyAudioError(f"empty audio (0 samples): {path}")
+        return waveform, sr
+
+
 def _process_one(job: Job) -> Tuple[str, str]:
     """
     Returns: ("ok"|"skip"|"err", message)
@@ -109,33 +154,23 @@ def _process_one(job: Job) -> Tuple[str, str]:
         if job.is_m4a:
             # Load audio (torchaudio I/O uses backend; user wants sox)
             # Note: some m4a decoding depends on your ffmpeg/gstreamer setup.
-            waveform, sr = torchaudio.load(str(job.src))  # [C, T], sr
+            waveform, sr = _load(job.src)  # [C, T], sr
             waveform, out_sr = _resample_to_16k_mono(waveform, sr)
 
-            # Save as PCM 16-bit WAV
-            torchaudio.save(
-                str(job.dst),
-                waveform,
-                out_sr,
-                bits_per_sample=16,
-            )
-            return "ok", f"m4a->wav16k {job.src} -> {job.dst}"
+            _save(waveform, out_sr, job.dst, job.fmt)
+            return "ok", f"m4a/flac->{job.fmt}16k {job.src} -> {job.dst}"
         elif job.is_wav:
-            waveform, sr = torchaudio.load(str(job.src))  # [C, T], sr
+            waveform, sr = _load(job.src)  # [C, T], sr
             waveform, out_sr = _resample_to_16k_mono(waveform, sr)
 
-            # Save as PCM 16-bit WAV
-            torchaudio.save(
-                str(job.dst),
-                waveform,
-                out_sr,
-                bits_per_sample=16,
-            )
-            return "ok", f"wav-{sr}->wav-16k {job.src} -> {job.dst}"
+            _save(waveform, out_sr, job.dst, job.fmt)
+            return "ok", f"wav-{sr}->{job.fmt}-16k {job.src} -> {job.dst}"
         else:
             shutil.copy2(job.src, job.dst)
             return "ok", f"copy {job.src} -> {job.dst}"
 
+    except EmptyAudioError as e:
+        return "err", f"{job.src} -> {job.dst}\n{e}"
     except Exception as e:
         tb = traceback.format_exc()
         return "err", f"{job.src} -> {job.dst}\n{e}\n{tb}"
@@ -164,6 +199,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=max(1, cpu_count() - 1))
     parser.add_argument("--overwrite", action="store_true", help="Always overwrite outputs")
+    parser.add_argument(
+        "--format",
+        choices=["wav", "ogg"],
+        default="wav",
+        help="Output format for audio files: wav = PCM 16-bit, ogg = Vorbis with fixed compression (default: wav)",
+    )
     parser.add_argument("--backend", type=str, default="sox_io", help="Preferred torchaudio backend (default: sox_io)")
     args = parser.parse_args()
 
@@ -178,7 +219,7 @@ def main() -> int:
 
     _init_torchaudio_backend(args.backend)
 
-    jobs = _make_jobs(input_root, output_root)
+    jobs = _make_jobs(input_root, output_root, args.format)
     if not jobs:
         print("No files found.", file=sys.stderr)
         return 0
@@ -195,7 +236,7 @@ def main() -> int:
                 pass
 
     total = len(jobs)
-    print(f"Found {total} files. Workers={args.workers}. Target SR={TARGET_SR}. Backend preference={args.backend}")
+    print(f"Found {total} files. Workers={args.workers}. Target SR={TARGET_SR}. Format={args.format}. Backend preference={args.backend}")
 
     ok = skip = err = 0
     # Use chunksize to reduce overhead for large trees

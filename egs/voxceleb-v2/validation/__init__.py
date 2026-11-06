@@ -1,7 +1,7 @@
 from ._base import ValidatorBase
 from ._types import ValidationTrial
 from .dataset import VoxDataset
-from .validator_antispoof import AggregatedAntiSpoofingValidator, AntiSpoofingValidator
+from .validator_antispoof import AggregatedAntiSpoofingValidator, AntiSpoofingValidator, GroupedAntiSpoofingValidator
 from .validator_trials import TrialBasedValidator
 
 __all__ = [
@@ -10,6 +10,7 @@ __all__ = [
     "TrialBasedValidator",
     "AntiSpoofingValidator",
     "AggregatedAntiSpoofingValidator",
+    "GroupedAntiSpoofingValidator",
     "VoxDataset",
     "WeightedDataset"
 ]

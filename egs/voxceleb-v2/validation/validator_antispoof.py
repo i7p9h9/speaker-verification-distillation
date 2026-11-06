@@ -449,3 +449,60 @@ class AggregatedAntiSpoofingValidator(ValidatorBase):
             averaged=averaged,
             joint=joint,
         )
+
+
+# ---------------------------------------------------------------------------
+# One live set vs several spoof groups
+# ---------------------------------------------------------------------------
+
+
+class GroupedAntiSpoofingValidator(ValidatorBase):
+    """
+    Live scores are computed once and compared against every spoof group separately
+    plus against all groups pooled together (``pooled``).
+
+    Result: :class:`AggregatedAntiSpoofingMetrics` with
+    ``per_validator[<group>]`` = live vs that group, ``per_validator["pooled"]`` =
+    live vs all spoof groups, ``joint`` = ``pooled`` and ``averaged`` = mean over the
+    individual groups (pooled excluded).
+
+    TensorBoard keys: ``per_validator/<name>/<group>/eer`` etc.
+    """
+
+    POOLED = "pooled"
+
+    def __init__(
+        self,
+        name: str,
+        bonafide_loader: DataLoader,
+        spoof_loaders: tp.Dict[str, DataLoader],
+        score_fn: tp.Optional[tp.Callable[[tp.Any], tp.List[float]]] = None,
+        **kwargs: tp.Any,
+    ) -> None:
+        if not spoof_loaders:
+            raise ValueError("At least one spoof group is required.")
+        if self.POOLED in spoof_loaders:
+            raise ValueError(f"'{self.POOLED}' is a reserved group name")
+        super().__init__(name=name, **kwargs)
+        self.bonafide_loader = bonafide_loader
+        self.spoof_loaders = spoof_loaders
+        # reuse the scoring code of the single validator
+        self._scorer = AntiSpoofingValidator(
+            name=name, bonafide_loader=bonafide_loader, spoof_loader=bonafide_loader, score_fn=score_fn
+        )
+
+    def validate(self, model: nn.Module, device: torch.device) -> AggregatedAntiSpoofingMetrics:
+        live = self._scorer._collect_scores(model, device, self.bonafide_loader)
+
+        per_validator: tp.Dict[str, AntiSpoofingMetrics] = {}
+        pooled_spoof: tp.List[float] = []
+        for group, loader in self.spoof_loaders.items():
+            spoof = self._scorer._collect_scores(model, device, loader)
+            pooled_spoof.extend(spoof)
+            per_validator[group] = _build_metrics(live, spoof, return_scores=False)
+
+        averaged = _average_metrics(list(per_validator.values()))
+        joint = _build_metrics(live, pooled_spoof, return_scores=False)
+        per_validator[self.POOLED] = joint
+
+        return AggregatedAntiSpoofingMetrics(per_validator=per_validator, averaged=averaged, joint=joint)

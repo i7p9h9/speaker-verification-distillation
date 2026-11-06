@@ -20,6 +20,8 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
+        ffmpeg \
+        gcc \
         git \
         libsndfile1 \
         sudo \
@@ -35,3 +37,4 @@ USER ${USERNAME}
 WORKDIR /workspace/formanta-distill
 
 CMD ["sleep", "infinity"]
+

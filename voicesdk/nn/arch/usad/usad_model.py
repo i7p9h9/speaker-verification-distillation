@@ -1,4 +1,6 @@
+import json
 import os
+import struct
 from dataclasses import make_dataclass
 from typing import List, Optional, Tuple, Union
 
@@ -91,6 +93,29 @@ def wav_to_fbank(
     if return_lengths:
         return mels, mel_lengths
     return mels
+
+
+_SAFETENSORS_DTYPES = {"F32": torch.float32, "F16": torch.float16, "BF16": torch.bfloat16, "F64": torch.float64}
+
+
+def _read_safetensors(path: str) -> dict:
+    """Minimal ``.safetensors`` reader (8-byte header size + JSON header + raw tensor bytes).
+
+    Avoids a dependency on the ``safetensors`` package; supports floating point tensors only.
+    """
+    with open(path, "rb") as f:
+        (header_size,) = struct.unpack("<Q", f.read(8))
+        header = json.loads(f.read(header_size))
+        data = bytearray(f.read())
+    tensors = {}
+    for name, info in header.items():
+        if name == "__metadata__":
+            continue
+        start, end = info["data_offsets"]
+        dtype = _SAFETENSORS_DTYPES[info["dtype"]]
+        tensor = torch.frombuffer(data, dtype=dtype, count=(end - start) // dtype.itemsize, offset=start)
+        tensors[name] = tensor.reshape(info["shape"]).clone()
+    return tensors
 
 
 class UsadModel(nn.Module):
@@ -360,6 +385,30 @@ class UsadModel(nn.Module):
         for k in list(state_dict.keys()):
             if not k.startswith("encoder."):
                 del state_dict[k]
+        model.load_state_dict(state_dict, strict=True)
+        return model
+
+    # keys of the HuggingFace config.json that are not model hyper-parameters
+    _HF_CONFIG_SERVICE_KEYS = ("architectures", "auto_map", "model_type", "torch_dtype", "transformers_version")
+
+    @classmethod
+    def load_from_safetensors(cls, weights_path: str, config_path: Optional[str] = None):
+        """Load from a HuggingFace ``MIT-SLS/USAD2-*`` snapshot: ``model.safetensors`` + ``config.json``.
+
+        ``config_path`` defaults to the ``config.json`` next to the weights. The HF wrapper stores the
+        encoder under the ``model.`` prefix, which is stripped here.
+        """
+        if config_path is None:
+            config_path = os.path.join(os.path.dirname(os.path.abspath(weights_path)), "config.json")
+        with open(config_path, encoding="utf-8") as f:
+            config = json.load(f)
+        for key in cls._HF_CONFIG_SERVICE_KEYS:
+            config.pop(key, None)
+        model = cls(make_dataclass("Config", config.keys())(**config))
+
+        state_dict = {
+            (k[len("model."):] if k.startswith("model.") else k): v for k, v in _read_safetensors(weights_path).items()
+        }
         model.load_state_dict(state_dict, strict=True)
         return model
 

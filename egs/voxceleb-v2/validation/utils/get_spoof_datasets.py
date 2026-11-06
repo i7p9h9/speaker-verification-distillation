@@ -177,6 +177,58 @@ def get_remasc(
     )
 
 
+@dataclasses.dataclass
+class PlaybackSpoofDatasets:
+    dataset_live: WavDataset
+    dataset_deep_fake: WavDataset
+    dataset_replay: WavDataset
+    dataset_replay_deep_fake: WavDataset
+
+
+def get_playbackspoof(
+    dir_main: str,
+    reader: AudioReaderBase,
+    fraction: float = 1.0,
+    seed: int = 42,
+    extension: str = ".flac",
+) -> PlaybackSpoofDatasets:
+    """
+    Load PlaybackSpoof regrouped by ``egs/dataset-processing/regroup-playbackspoof.py``.
+
+    Expected layout::
+
+        dir_main/
+            live/clean/*.flac
+            spoof/deep-fake/clean/*.flac
+            spoof/replay/<HH|HL|LH|LL>/*.flac
+            spoof/replay-deep-fake/<HH|HL|LH|LL>/*.flac
+
+    Args:
+        fraction: Share of files kept in every group (live / deep-fake / replay /
+                  replay-deep-fake), 1.0 = all. A deterministic random subset
+                  (depends on *seed* only), sampled per group, so the group ratios
+                  are preserved.
+    """
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"fraction must be in (0, 1], got {fraction}")
+
+    def _group(sub: str) -> WavDataset:
+        root = Path(dir_main) / sub
+        if not root.is_dir():
+            raise FileNotFoundError(f"PlaybackSpoof folder not found: {root}")
+        paths = sorted(find_files_recursive(str(root), extension=extension))
+        if fraction < 1.0 and paths:
+            paths = sorted(_sample(paths, max(1, round(len(paths) * fraction)), seed))
+        return WavDataset(paths, reader)
+
+    return PlaybackSpoofDatasets(
+        dataset_live=_group("live"),
+        dataset_deep_fake=_group("spoof/deep-fake"),
+        dataset_replay=_group("spoof/replay"),
+        dataset_replay_deep_fake=_group("spoof/replay-deep-fake"),
+    )
+
+
 def get_asv_spoof_19(
     dir_wav: str,
     file_meta: str,
