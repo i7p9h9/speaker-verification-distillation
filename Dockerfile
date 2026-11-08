@@ -22,6 +22,7 @@ RUN apt-get update \
         ca-certificates \
         ffmpeg \
         gcc \
+        libc6-dev \
         git \
         libsndfile1 \
         sudo \

@@ -1153,11 +1153,14 @@ wheels = [
 [[package]]
 name = "minlora"
 version = "0.1.0"
-source = { git = "https://github.com/cccntu/minLoRA.git#d47a4c93df87540bb396172cfac1f3246e7db5f9" }
+source = { editable = "thirdparty/minLoRA" }
 dependencies = [
     { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'linux'" },
 ]
+
+[package.metadata]
+requires-dist = [{ name = "torch", specifier = ">=1.9.0" }]
 
 [[package]]
 name = "ml-dtypes"
@@ -2528,7 +2531,7 @@ requires-dist = [
     { name = "librosa", specifier = ">=0.10.2,<0.12" },
     { name = "lightning", specifier = ">=2.5,<2.6" },
     { name = "matplotlib", specifier = ">=3.9,<4" },
-    { name = "minlora", git = "https://github.com/cccntu/minLoRA.git" },
+    { name = "minlora", editable = "thirdparty/minLoRA" },
     { name = "numba", specifier = ">=0.68.0" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "onnx", specifier = ">=1.23.2" },

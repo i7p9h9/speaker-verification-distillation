@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import typing as tp
 
 import torch
@@ -9,6 +10,8 @@ from ._registry import _NameRegistry
 from ._shared_weights import SharedWeights
 from ._type import LabeledSample, NamedSample, LabeledSource, UnLabeledSource, WeightedDataset
 from .aggregated import AggregatedDataset
+
+logger = logging.getLogger(__name__)
 
 
 def _sample_with_path(ds: AggregatedDataset) -> tp.Tuple[tp.Any, str]:
@@ -33,7 +36,13 @@ def _sample_with_path(ds: AggregatedDataset) -> tp.Tuple[tp.Any, str]:
         path = f"{child_name}/{sub_path}" if sub_path else child_name
     else:
         inner_idx = int(torch.randint(0, len(child_ds), (1,)).item())  # type: ignore[arg-type]
-        sample = child_ds[inner_idx]
+        try:
+            sample = child_ds[inner_idx]
+        except Exception as e:
+            wav_list = getattr(child_ds, "_wav_list", None) or getattr(child_ds, "wav_list", None)
+            if wav_list is not None:
+                e.add_note(f"while reading {wav_list[inner_idx]}")
+            raise
         path = child_name
 
     return sample, path
@@ -142,9 +151,27 @@ class LabeledAggregatedDataset(AggregatedDataset):
         source_name = self._weighted[dataset_idx].name or inner_ds.name
         label = self._labels[dataset_idx]
 
-        sample, leaf_path = _sample_with_path(inner_ds)
+        sample, leaf_path = self._sample_with_retry(inner_ds)
         dataset_name = f"{self._name}/{source_name}/{leaf_path}" if leaf_path else f"{self._name}/{source_name}"
         return LabeledSample(sample=sample, label=label, dataset_name=dataset_name)
+
+    #: how many times an unreadable / empty file is replaced by another random one before giving up
+    max_read_retries: int = 20
+
+    def _sample_with_retry(self, inner_ds: AggregatedDataset) -> tp.Tuple[tp.Any, str]:
+        """Draw a sample; if the file is broken (empty, corrupt, ...) log it and draw another random one."""
+        for attempt in range(self.max_read_retries):
+            try:
+                return _sample_with_path(inner_ds)
+            except Exception as e:
+                notes = " ".join(getattr(e, "__notes__", []))
+                logger.warning(
+                    "[%s] skipping unreadable sample (%d/%d): %s: %s %s",
+                    self._name, attempt + 1, self.max_read_retries, type(e).__name__, e, notes,
+                )
+                if attempt == self.max_read_retries - 1:
+                    raise
+        raise RuntimeError("unreachable")
 
     # ------------------------------------------------------------------
     # Helpers

@@ -138,12 +138,15 @@ def get_remasc(
                 1010101.wav
                 ...
 
-    ``type`` is one of ``source`` / ``genuine`` / ``replayed``:
+    ``type`` is one of ``source`` / ``live`` / ``replay`` (the original ReMASC
+    naming ``genuine`` / ``replayed`` is accepted as well):
 
-    * ``genuine``  -> live (bonafide recording of a real speaker);
-    * ``replayed`` -> spoof (replay attack);
-    * ``source``   -> skipped (the original recordings that are played back to
+    * ``live`` (``genuine``)    -> live (bonafide recording of a real speaker);
+    * ``replay`` (``replayed``) -> spoof (replay attack);
+    * ``source``                -> skipped (the original recordings that are played back to
       make the replays; they are neither a genuine access nor an attack).
+
+    Raises ValueError if either class ends up empty (e.g. unknown ``type`` values).
 
     Args:
         dir_main:    Root directory of the dataset.
@@ -158,15 +161,24 @@ def get_remasc(
     meta_path = Path(dir_main) / "meta.csv"
     live_paths: tp.List[str] = []
     spoof_paths: tp.List[str] = []
+    unknown_types: tp.Set[str] = set()
 
     with open(meta_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             kind = row["type"].strip().lower()
             full_path = str(Path(dir_main) / row["path"])
-            if kind == "genuine":
+            if kind in ("live", "genuine"):
                 live_paths.append(full_path)
-            elif kind == "replayed":
+            elif kind in ("replay", "replayed"):
                 spoof_paths.append(full_path)
+            elif kind != "source":
+                unknown_types.add(kind)
+
+    if not live_paths or not spoof_paths:
+        raise ValueError(
+            f"ReMASC {meta_path}: found {len(live_paths)} live and {len(spoof_paths)} spoof files; "
+            f"unrecognised 'type' values: {sorted(unknown_types)}"
+        )
 
     live_paths = _sample(live_paths, limit_live, seed)
     spoof_paths = _sample(spoof_paths, limit_spoof, seed)

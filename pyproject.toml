@@ -41,7 +41,7 @@ dependencies = [
 torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
 torchaudio = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
 audimentation = { path = "audiment", editable = true }
-minlora = { git = "https://github.com/cccntu/minLoRA.git" }
+minlora = { path = "thirdparty/minLoRA", editable = true }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

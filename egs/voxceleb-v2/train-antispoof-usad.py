@@ -17,6 +17,7 @@ Usage::
 import argparse
 import os
 import shutil
+import subprocess
 import typing as tp
 from dataclasses import dataclass, field, fields
 from functools import partial
@@ -25,7 +26,7 @@ from pathlib import Path
 import pytorch_lightning as pl
 import torch
 from audimentation import AddNoise, FileListAudioProvider, OneOf, Reverb, SequentialCompose
-from minlora.model import LoRAParametrization, apply_lora
+from minlora.model import LoRAParametrization, SingLoRAParametrization, apply_lora, set_singlora_ramp
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
@@ -103,6 +104,9 @@ class LivePaths:
     cml: str = f"{DIR_SPOOF}/live/cml"  # subfolder per source
     hifi_tts: str = f"{DIR_SPOOF}/live/hi_fi_tts_v0"
     playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/train/live/clean"  # .flac
+    # ReMASC genuine, regrouped by egs/dataset-processing/regroup-remasc.py: <env>/*.wav, one source per environment.
+    # Must NOT contain the validation files (regroup with --exclude-meta <validation original_meta.csv>).
+    remasc: str = f"{DIR_SPOOF}/remasc/core/live"
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,8 @@ class ReplayPaths:
     playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/train/spoof/replay"  # <HH|HL|LH|LL>/*.flac
     # replayed TTS/VC: playback and re-recording, so it is a replay attack as well
     playbackspoof_deep_fake: str = f"{DIR_SPOOF}/playbackspoof/audio/train/spoof/replay-deep-fake"  # .flac
+    # ReMASC replayed, regrouped by regroup-remasc.py: <env>/*.wav, one source per environment (see LivePaths.remasc)
+    remasc: str = f"{DIR_SPOOF}/remasc/core/spoof/replay"
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,7 @@ class DeepFakePaths:
     """Synthetic speech without playback (label 2 for 3 classes)."""
 
     tts_common: str = f"{DIR_SPOOF}/synthesis/tts"  # subfolder per engine
-    vc_tts: str = f"{DIR_SPOOF}/vc_tts_engines/"
+    vc_tts: str = f"{DIR_SPOOF}/vc_tts_engines/"  # subfolder per engine, .ogg
     vocoders_v1: str = f"{DIR_SPOOF}/synthesis/vocoders-v1/train/synthes"
     vc_vol1: str = f"{DIR_SPOOF}/synthesis/voice_clones/train/synthes"
     vc_vol2: str = f"{DIR_SPOOF}/synthesis/voice-clone-vol2/train"
@@ -140,7 +146,7 @@ class ValidationPaths:
     # ReMASC root: meta.csv + eval/
     remasc: str = f"{DIR_SPOOF}/antispoof-testing/ReMASC"
     # PlaybackSpoof regrouped by egs/dataset-processing/regroup-playbackspoof.py (live/, spoof/...)
-    playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/validation"
+    playbackspoof: str = f"{DIR_SPOOF}/playbackspoof/audio/test"
 
 
 @dataclass(frozen=True)
@@ -166,19 +172,42 @@ class PathsConfig:
 PATHS = PathsConfig()
 
 
+def _c_compiler_works() -> bool:
+    """True if a C compiler can build what Triton builds: a Python extension using libc + Python headers.
+
+    ``which gcc`` is not enough: a bare ``gcc`` without ``libc6-dev`` fails with ``stdlib.h: No such file``.
+    """
+    import subprocess
+    import sysconfig
+    import tempfile
+
+    cc = os.environ.get("CC") or shutil.which("gcc") or shutil.which("cc")
+    if not cc:
+        return False
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "probe.c"
+        src.write_text("#include <stdlib.h>\n#include <Python.h>\nint main(void) { return 0; }\n")
+        cmd = [cc, "-c", str(src), "-o", str(Path(tmp) / "probe.o"), f"-I{sysconfig.get_paths()['include']}"]
+        try:
+            return subprocess.run(cmd, capture_output=True, timeout=30).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+
 def disable_native_triton_ops_without_compiler() -> None:
     """torch>=2.13 overrides some eager ops (``bmm``) with Triton kernels that are JIT-compiled.
 
-    Without a C compiler (e.g. the slim dev container) the first such call crashes in backward
-    with ``Failed to find C compiler``; in that case fall back to the regular ATen kernels.
+    Without a working C compiler (e.g. the slim dev container) the first such call crashes in backward
+    with ``Failed to find C compiler`` / ``stdlib.h: No such file``; in that case fall back to the
+    regular ATen kernels.
     """
-    if os.environ.get("CC") or shutil.which("gcc") or shutil.which("cc"):
+    if _c_compiler_works():
         return
     try:
         from torch._native import registry
 
         registry.deregister_op_overrides(disable_dsl_names="triton")
-        print("[env] no C compiler found: torch native Triton op overrides disabled")
+        print("[env] no working C compiler (gcc + libc6-dev + Python.h): torch native Triton op overrides disabled")
     except Exception as e:  # private torch API - never block training because of it
         print(f"[env] could not disable torch native Triton overrides: {e!r}")
 
@@ -220,6 +249,7 @@ class UsadBackbone(nn.Module):
         lora_alpha: float,
         lora_dropout: float,
         lora_targets: tp.Sequence[str],
+        lora_type: str = "lora",
     ) -> None:
         super().__init__()
         self.usad = load_usad(ckpt_path, expected_dim)
@@ -229,7 +259,8 @@ class UsadBackbone(nn.Module):
         # 1) freeze the whole pretrained encoder, 2) inject LoRA (new params are trainable).
         self.usad.requires_grad_(False)
         self.n_lora_layers = add_lora_to_linears(
-            self.usad, lora_targets, rank=lora_rank, alpha=lora_alpha, dropout=lora_dropout
+            self.usad, lora_targets, rank=lora_rank, alpha=lora_alpha, dropout=lora_dropout,
+            lora_type=lora_type,
         )
 
         self.layer_logits = nn.Parameter(torch.zeros(self.num_layers))
@@ -251,6 +282,7 @@ def add_lora_to_linears(
     rank: int,
     alpha: float,
     dropout: float,
+    lora_type: str = "lora",
 ) -> int:
     """Attach minLoRA parametrizations to ``nn.Linear`` layers whose name contains a target substring.
 
@@ -261,7 +293,7 @@ def add_lora_to_linears(
     lora_config = {
         nn.Linear: {
             "weight": partial(
-                LoRAParametrization.from_linear,
+                SingLoRAParametrization.from_linear if lora_type == "singlora" else LoRAParametrization.from_linear,
                 rank=rank,
                 lora_alpha=alpha,
                 lora_dropout_p=dropout,
@@ -294,6 +326,7 @@ def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
+        lora_type=args.lora_type,
         lora_targets=[t.strip() for t in args.lora_targets.split(",") if t.strip()],
     )
     am_loss = AMSoftmaxLoss(
@@ -308,10 +341,23 @@ def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]
     n_head = sum(p.numel() for p in am_loss.parameters())
     print(
         f"[model] USAD2-{args.model} ({args.usad_ckpt or USAD_MODELS[args.model][1]}): LoRA on {backbone.n_lora_layers} Linear layers "
-        f"(r={args.lora_rank}, alpha={args.lora_alpha}); trainable backbone {n_train / 1e6:.2f}M "
+        f"({args.lora_type}, r={args.lora_rank}, alpha={args.lora_alpha}); trainable backbone {n_train / 1e6:.2f}M "
         f"/ {n_total / 1e6:.2f}M (+ AM head {n_head / 1e3:.1f}K)"
     )
     return backbone, am_loss
+
+
+class SingLoRARampCallback(Callback):
+    """SingLoRA ramp-up u(t) = min(step / ramp_steps, 1); full strength (1.0) outside of fit()."""
+
+    def __init__(self, ramp_steps: int) -> None:
+        self.ramp_steps = ramp_steps
+
+    def on_train_batch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule, batch, batch_idx) -> None:
+        set_singlora_ramp(pl_module, min(trainer.global_step / self.ramp_steps, 1.0) if self.ramp_steps > 0 else 1.0)
+
+    def on_fit_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        set_singlora_ramp(pl_module, 1.0)
 
 
 class SaveAdapterCallback(Callback):
@@ -347,19 +393,60 @@ class SaveAdapterCallback(Callback):
 # ---------------------------------------------------------------------------
 
 
-def backup_script(log_dir: Path) -> None:
-    """Copy the current script to log_dir/scripts/."""
-    src = Path(__file__).resolve()
-    dst_dir = log_dir / "scripts"
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / src.name
-    shutil.copy2(src, dst)
-    print(f"Script backed up: {src} -> {dst}")
+def backup_code(log_dir: Path) -> None:
+    """Copy every git-tracked file (the working-tree version, incl. uncommitted edits) to ``log_dir/code/``.
+
+    Also writes ``code/git-info.txt`` (commit hash + ``git status``). Tracked files that are deleted in the
+    working tree are skipped. Never fails the training: without git it falls back to copying this script only.
+    """
+    script = Path(__file__).resolve()
+    dst_root = log_dir / "code"
+    dst_root.mkdir(parents=True, exist_ok=True)
+
+    def git(root: Path, *args: str) -> str:
+        # safe.directory=* : the repo is often owned by another uid inside the container
+        cmd = ["git", "-c", "safe.directory=*", "-C", str(root), *args]
+        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60).stdout
+
+    try:
+        root = Path(git(script.parent, "rev-parse", "--show-toplevel").strip())
+        names = [n for n in git(root, "ls-files", "-z").split("\0") if n]
+        copied = skipped = 0
+        for name in names:
+            src = root / name
+            if not src.is_file():
+                skipped += 1
+                continue
+            dst = dst_root / name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            copied += 1
+        info = f"commit: {git(root, 'rev-parse', 'HEAD').strip()}\n\n{git(root, 'status', '--short', '--untracked-files=no')}"
+        (dst_root / "git-info.txt").write_text(info)
+        print(f"Code backed up: {copied} git-tracked files ({skipped} deleted in the working tree skipped) -> {dst_root}")
+    except (OSError, subprocess.SubprocessError) as e:
+        dst = dst_root / script.name
+        shutil.copy2(script, dst)
+        print(f"[backup_code] git unavailable ({e!r}); copied only the script: {script} -> {dst}")
 
 
 # ---------------------------------------------------------------------------
 # Validation: 20% of ASVspoof 2017
 # ---------------------------------------------------------------------------
+
+
+def live_log_odds_score(model_output: tp.Any) -> tp.List[float]:
+    """Per-file score for EER: log-odds of "live" against all spoof classes.
+
+    The head returns the cosines to the class prototypes ``(B, C)``; as in AM-Softmax training
+    ``p = softmax(AM_SCALE * cos)``, and the score is ``log(p_live / (1 - p_live))``
+    = ``K*cos_live - logsumexp(K*cos_spoof)`` (class 0 = live, the others = every spoof class).
+    Always defined (unlike a log of a difference of cosines), higher = more likely bonafide.
+    """
+    if isinstance(model_output, (tuple, list)):
+        model_output = model_output[0]
+    logits = AM_SCALE * model_output.detach().float()
+    return (logits[:, 0] - torch.logsumexp(logits[:, 1:], dim=1)).cpu().tolist()
 
 
 def get_validation(
@@ -394,6 +481,7 @@ def get_validation(
             name=name,
             bonafide_loader=data_loader(datasets.dataset_live),
             spoof_loader=data_loader(datasets.dataset_spoof),
+            score_fn=live_log_odds_score,
         )
 
     validators = [
@@ -426,6 +514,7 @@ def get_validation(
             "replay": data_loader(ps.dataset_replay),
             "replay-deep-fake": data_loader(ps.dataset_replay_deep_fake),
         },
+        score_fn=live_log_odds_score,
     )
     return [joined, playbackspoof]
 
@@ -490,6 +579,13 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
         ignore_empty=False,
         prefix="legacy-",
     )
+    # vc_tts_engines was resampled to .ogg (resample-dir.py --format ogg)
+    create_spoof_source_ogg = partial(
+        sources_from_subfolders,
+        factory=partial(VoxDataset, reader=reader, file_extension="ogg"),
+        ignore_empty=False,
+        prefix="legacy-",
+    )
     create_live_source = partial(
         sources_from_subfolders,
         factory=dataset_factory,
@@ -524,18 +620,27 @@ def build_train_dataset(reader: tp.Any) -> LabeledAggregatedDataset:
     ]
     sources += create_live_source(root=live.cml, label=label_live, source_weight=0.8, prefix="cml-")
 
+    # ReMASC: every environment (outdoor / indoor-1 / indoor-2 / vehicle) is a separate source for live and for replay
+    create_env_source = partial(sources_from_subfolders, factory=dataset_factory, ignore_empty=True)
+    remasc_live = create_env_source(root=live.remasc, label=label_live, source_weight=0.5, prefix="remasc-live-")
+    remasc_replay = create_env_source(root=replay.remasc, label=label_la, source_weight=1.0, prefix="remasc-replay-")
+    print(f"[remasc train] {len(remasc_live)} live + {len(remasc_replay)} replay sources: "
+          f"{[src.name for src in remasc_live + remasc_replay]}")
+    sources += remasc_live
+
     # spoof - LA (replay)
     sources += [
         single(replay.formanta, label_la, 4.0, "Replay-Formanta"),
         single(replay.playbackspoof, label_la, 2.0, "playbackspoof-replay", file_extension="flac"),
         single(replay.playbackspoof_deep_fake, label_la, 1.0, "playbackspoof-replay-deep-fake", file_extension="flac"),
     ]
+    sources += remasc_replay
 
     # spoof - DF (synthetic)
     sources += create_spoof_source(
         root=df.tts_common, label=label_df, source_weight=2.0, ignore_pattern="*tts_test_set*"
     )
-    sources += create_spoof_source(root=df.vc_tts, label=label_df, source_weight=0.8)
+    sources += create_spoof_source_ogg(root=df.vc_tts, label=label_df, source_weight=0.8)
     sources += create_spoof_source(root=df.vocoders_v1, label=label_df, source_weight=1.2)
     sources += create_spoof_source(root=df.vc_vol1, label=label_df, source_weight=0.5)
     sources += create_spoof_source(
@@ -558,6 +663,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--embedding-dim", type=int, default=256)
 
     g = p.add_argument_group("LoRA (minLoRA)")
+    g.add_argument("--lora-type", choices=["lora", "singlora"], default="lora", help="singlora: single matrix A (dW = A A^T), see thirdparty/minLoRA")
+    g.add_argument("--singlora-ramp-steps", type=int, default=1000, help="SingLoRA ramp-up length in optimizer steps")
     g.add_argument("--lora-rank", type=int, default=8)
     g.add_argument("--lora-alpha", type=float, default=16.0)
     g.add_argument("--lora-dropout", type=float, default=0.0)
@@ -698,14 +805,15 @@ def main() -> None:
         gradient_clip_val=1.0,
         accumulate_grad_batches=1,
         logger=tb_logger,
-        callbacks=[checkpoint_cb, adapter_cb],
+        callbacks=[checkpoint_cb, adapter_cb]
+        + ([SingLoRARampCallback(args.singlora_ramp_steps)] if args.lora_type == "singlora" else []),
         enable_progress_bar=True,
         log_every_n_steps=50,
         limit_train_batches=args.steps_per_epoch,
         limit_val_batches=0,  # validators run in AntispoofLightningModule.on_train_epoch_end
     )
 
-    backup_script(exp_dir)
+    backup_code(exp_dir)
     trainer.fit(module, train_dataloaders=loader_train, ckpt_path=args.resume)
 
 
