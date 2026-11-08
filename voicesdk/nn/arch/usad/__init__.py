@@ -4,3 +4,4 @@ from .usad_model import (
     get_scene_embeddings,
     get_timestamp_embeddings,
 )
+from .usad_convertible import UsadConvertible, UsadFbank

@@ -1,0 +1,10 @@
+# ResNetTF-34 anti-spoofing (train-antispoof.py) -> ONNX.   python convert-antispoof.py --config configs/antispoof-resnettf34.yaml
+# Outputs: output (3 scaled-cosine logits), live, spoof, df, replay (one-vs-rest log-odds).
+arch: resnettf
+model_cfg: data/cfg-models/resnettf_34.yaml
+ckpt: data/exps/antispoof-join-train-015/checkpoints/epoch=29-step=150000.ckpt
+seconds: 5
+regular: true
+dynamo: false
+include_feats: true
+exclude_feats: false

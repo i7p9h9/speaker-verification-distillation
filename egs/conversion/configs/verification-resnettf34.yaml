@@ -1,0 +1,7 @@
+# ResNetTF-34 speaker embedding -> ONNX
+arch: resnettf
+model_cfg: data/cfg-models/resnettf_34.yaml
+ckpt: put/your/path/here.ckpt             # e.g. data/exps/mic-emb-cosine-014/student-last.ckpt
+seconds: [1, 3]
+regular: true
+include_feats: true

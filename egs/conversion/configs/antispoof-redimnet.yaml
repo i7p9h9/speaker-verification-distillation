@@ -1,0 +1,7 @@
+# ReDimNet anti-spoofing (train-antispoof.py with a ReDimNetWrap backbone) -> ONNX
+arch: redimnet
+model_cfg: data/cfg-models/redimnet_M.yaml
+ckpt: put/your/path/here.ckpt
+seconds: 5
+regular: true
+include_feats: true

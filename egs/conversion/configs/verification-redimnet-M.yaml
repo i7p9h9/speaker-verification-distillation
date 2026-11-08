@@ -1,0 +1,7 @@
+# ReDimNet-M speaker embedding -> ONNX   (redimnet_L.yaml for the large one)
+arch: redimnet
+model_cfg: data/cfg-models/redimnet_M.yaml
+ckpt: put/your/path/here.ckpt             # e.g. data/exps/tel-subnet-emb-cosine-016/checkpoints/last.ckpt
+seconds: [1, 3]
+regular: true
+include_feats: true

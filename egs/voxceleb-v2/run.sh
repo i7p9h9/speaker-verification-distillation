@@ -1,0 +1,1 @@
+docker compose exec dev uv run python egs/voxceleb-v2/train-antispoof-mhubert.py --backedn own --embedding-dim 256 --lora-rank 8 --lora-alpha 16 --lora-dropout 0.1 --batch-size 128 --step-per-epoch 5000 --max-epochs 30 --val-fraction 0.5 --playbackspoof-fraction 0.25 --log-dir /media/hdd/exps/ --exp-name spoof-mhubert-002

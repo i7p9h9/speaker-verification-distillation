@@ -1,0 +1,8 @@
+# mHuBERT-147 + LoRA/SingLoRA adapter (train-antispoof-mhubert.py) -> ONNX
+arch: mhubert
+ckpt: put/your/path/here.pt               # adapter-last.pt or a Lightning .ckpt of the experiment
+pretrained: /media/hdd/shared/ckpt/mhubert   # dir with model.safetensors + config.json
+lora_alpha: 16.0           # must equal --lora-alpha of the training run
+seconds: 5
+regular: true
+include_feats: true        # exclude_feats for mHuBERT = the input is already mean/var-normalised audio

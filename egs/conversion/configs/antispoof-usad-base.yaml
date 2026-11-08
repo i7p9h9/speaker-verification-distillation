@@ -1,0 +1,9 @@
+# USAD 2.0 Base + LoRA/SingLoRA adapter (train-antispoof-usad.py) -> ONNX, Kaldi fbank inside the graph
+arch: usad-base
+ckpt: put/your/path/here.pt               # adapter-last.pt or a Lightning .ckpt of the experiment
+pretrained: /media/shared/data/pretrained/usad2/base/model.safetensors   # base weights (config.json next to it)
+lora_alpha: 16.0           # must equal --lora-alpha of the training run
+# lora_targets: query_proj,key_proj,value_proj,out_proj,ffn_1,ffn_2        # only if changed in training
+seconds: 5
+regular: true
+include_feats: true

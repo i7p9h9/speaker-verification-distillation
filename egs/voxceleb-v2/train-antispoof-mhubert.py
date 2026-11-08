@@ -32,6 +32,7 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader
+from train_config import make_batch_delay_callback, parse_with_config, save_config
 from validation import AggregatedAntiSpoofingValidator, AntiSpoofingValidator, GroupedAntiSpoofingValidator, VoxDataset
 from validation.utils.get_spoof_datasets import get_asv_spoof_17_holdout, get_playbackspoof, get_remasc
 
@@ -701,7 +702,8 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--log-dir", default="data/exps/")
     g.add_argument("--exp-name", default=None, help="default: antispoof-mhubert147-<lora-type>")
     g.add_argument("--log-weights-every", type=int, default=100)
-    return p.parse_args()
+    g.add_argument("--batch-delay-ms", type=float, default=0.0, help="pause after every training batch, ms (lets the GPU cool down); 0 = off")
+    return parse_with_config(p)
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +715,7 @@ def main() -> None:
     args = parse_args()
     disable_native_triton_ops_without_compiler()
     exp_name = args.exp_name or f"antispoof-mhubert147-{args.lora_type}"
+    args.exp_name = exp_name
     total_steps = args.steps_per_epoch * args.max_epochs
     pl.seed_everything(args.seed)
 
@@ -745,7 +748,7 @@ def main() -> None:
     checkpoint_cb = ModelCheckpoint(
         dirpath=str(exp_dir / "checkpoints"),
         filename="{epoch}-{step}",
-        save_top_k=3,
+        save_top_k=20,
         monitor="train/loss",
         mode="min",
         save_last=True,
@@ -796,6 +799,7 @@ def main() -> None:
         accumulate_grad_batches=1,
         logger=tb_logger,
         callbacks=[checkpoint_cb, adapter_cb]
+        + ([make_batch_delay_callback(args.batch_delay_ms)] if args.batch_delay_ms > 0 else [])
         + ([SingLoRARampCallback(args.singlora_ramp_steps)] if args.lora_type == "singlora" else []),
         enable_progress_bar=True,
         log_every_n_steps=50,
@@ -804,6 +808,7 @@ def main() -> None:
     )
 
     backup_code(exp_dir)
+    save_config(args, exp_dir, Path(__file__).name)
     trainer.fit(module, train_dataloaders=loader_train, ckpt_path=args.resume)
 
 

@@ -1,0 +1,17 @@
+# ResNetTF-50 speaker embedding -> ONNX.   python convert-verification.py --config configs/verification-resnettf50.yaml
+# Relative paths are relative to the working directory (the notebooks were run from egs/voxceleb-v2).
+# Any key = the command-line option with '-' as '_'; an explicit command-line option overrides it.
+arch: resnettf
+model_cfg: data/cfg-models/resnettf_50.yaml
+ckpt: data/exps/tel-emb-cosine-021/checkpoints/last.ckpt
+seconds: [1, 3]            # one onnx per value
+# Variants: regular and/or dynamo  x  include_feats and/or exclude_feats (all combinations are exported)
+regular: true
+dynamo: false
+include_feats: true
+exclude_feats: false
+# out_dir: data/onnx       # default: next to the checkpoint
+# opset: 17
+simplify: true
+openvino: true
+verify: true
