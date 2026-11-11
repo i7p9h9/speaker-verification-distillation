@@ -17,7 +17,7 @@ from voicesdk.nn.arch import ReDimNetWrap, ResNetTF
 from voicesdk.nn.arch.mhubert import DEFAULT_LORA_TARGETS as MHUBERT_LORA_TARGETS
 from voicesdk.nn.arch.mhubert import load_mhubert
 from voicesdk.nn.arch.usad import UsadConvertible, UsadModel
-from voicesdk.nn.loss import AMSoftmaxLoss
+from voicesdk.nn.loss import AMSoftmaxLoss, SoftmaxLoss
 
 ARCHS = ("resnettf", "redimnet", "usad-small", "usad-base", "mhubert")
 CNN_ARCHS = ("resnettf", "redimnet")
@@ -197,7 +197,7 @@ def build_ssl_backbone(
 class AntispoofModel(nn.Module):
     """backbone -> AM-Softmax cosine head. Outputs (all ``(B, ...)``):
 
-    output : (B, 3)  scaled cosine logits, classes [live, replay, df]
+    output : (B, 3)  logits (scaled cosine for an AM-Softmax head, raw for a softmax head), classes [live, replay, df]
     live   : log p_live / (p_replay + p_df)      one-vs-rest log-odds, p = softmax(logits)
     spoof  : log (p_replay + p_df) / p_live      = -live
     df     : log p_df / (p_live + p_replay)
@@ -208,14 +208,17 @@ class AntispoofModel(nn.Module):
 
     OUTPUT_NAMES = ("output", "live", "spoof", "df", "replay")
 
-    def __init__(self, backbone: nn.Module, am_loss: AMSoftmaxLoss) -> None:
+    def __init__(self, backbone: nn.Module, am_loss: nn.Module) -> None:
         super().__init__()
         self.backbone = backbone
         self.am_loss = am_loss
 
     def forward(self, x: torch.Tensor) -> tp.Tuple[torch.Tensor, ...]:
-        emb = F.normalize(self.backbone(x), p=2, dim=1)
-        logits = F.linear(emb, F.normalize(self.am_loss.weight, p=2, dim=1)) * self.am_loss.scale
+        emb = self.backbone(x)
+        if isinstance(self.am_loss, SoftmaxLoss):  # plain linear softmax head: raw logits
+            logits = self.am_loss.predict(emb)
+        else:  # AM-Softmax head at inference: scaled cosine
+            logits = F.linear(F.normalize(emb, p=2, dim=1), F.normalize(self.am_loss.weight, p=2, dim=1)) * self.am_loss.scale
         live, replay, df = logits[:, 0], logits[:, 1], logits[:, 2]
 
         def lse(*t: torch.Tensor) -> torch.Tensor:
@@ -231,7 +234,10 @@ def build_antispoof(args, include_feats: bool) -> tp.Tuple[nn.Module, ExampleFn]
     if "weight" not in head:
         raise KeyError(f"{args.ckpt}: no am_loss.weight (is this an anti-spoofing checkpoint?)")
     num_classes, embedding_dim = head["weight"].shape
-    am_loss = AMSoftmaxLoss(embedding_dim=embedding_dim, num_classes=num_classes, scale=AM_SCALE)
+    if "bias" in head:  # trained with --loss softmax
+        am_loss = SoftmaxLoss(embedding_dim=embedding_dim, num_classes=num_classes)
+    else:
+        am_loss = AMSoftmaxLoss(embedding_dim=embedding_dim, num_classes=num_classes, scale=AM_SCALE)
     load_into(am_loss, head, prefix="", what="am_loss")
 
     if args.arch in CNN_ARCHS:

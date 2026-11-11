@@ -50,7 +50,7 @@ from voicesdk.distillation.data import (
 )
 from voicesdk.distillation.training.trainer_antispoof import AntispoofLightningModule, WeightLogger
 from voicesdk.nn.arch.usad import UsadModel
-from voicesdk.nn.loss import AMSoftmaxLoss
+from voicesdk.nn.loss import AMSoftmaxLoss, SoftmaxLoss
 from voicesdk.utils.find_files import find_files_recursive
 
 # ---------------------------------------------------------------------------
@@ -319,7 +319,7 @@ def trainable_state_dict(module: nn.Module) -> tp.Dict[str, torch.Tensor]:
     return {k: v.detach().cpu() for k, v in module.state_dict().items() if k in names}
 
 
-def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]:
+def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, nn.Module]:
     backbone = UsadBackbone(
         ckpt_path=args.usad_ckpt or USAD_MODELS[args.model][1],
         expected_dim=USAD_MODELS[args.model][0],
@@ -330,12 +330,15 @@ def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]
         lora_type=args.lora_type,
         lora_targets=[t.strip() for t in args.lora_targets.split(",") if t.strip()],
     )
-    am_loss = AMSoftmaxLoss(
-        embedding_dim=args.embedding_dim,
-        num_classes=NUM_CLASSES,
-        scale=AM_SCALE,
-        margin=AM_MARGIN,
-    )
+    if args.loss == "softmax":
+        am_loss = SoftmaxLoss(embedding_dim=args.embedding_dim, num_classes=NUM_CLASSES)
+    else:
+        am_loss = AMSoftmaxLoss(
+            embedding_dim=args.embedding_dim,
+            num_classes=NUM_CLASSES,
+            scale=AM_SCALE,
+            margin=AM_MARGIN,
+        )
 
     n_total = sum(p.numel() for p in backbone.parameters())
     n_train = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
@@ -343,7 +346,7 @@ def get_model(args: argparse.Namespace) -> tp.Tuple[UsadBackbone, AMSoftmaxLoss]
     print(
         f"[model] USAD2-{args.model} ({args.usad_ckpt or USAD_MODELS[args.model][1]}): LoRA on {backbone.n_lora_layers} Linear layers "
         f"({args.lora_type}, r={args.lora_rank}, alpha={args.lora_alpha}); trainable backbone {n_train / 1e6:.2f}M "
-        f"/ {n_total / 1e6:.2f}M (+ AM head {n_head / 1e3:.1f}K)"
+        f"/ {n_total / 1e6:.2f}M (+ {args.loss} head {n_head / 1e3:.1f}K)"
     )
     return backbone, am_loss
 
@@ -662,6 +665,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", choices=sorted(USAD_MODELS), default="base", help="USAD 2.0 size")
     p.add_argument("--usad-ckpt", default=None, help="USAD2 weights: model.safetensors (+ config.json next to it) or fairseq usad2_*.pt (default: from USAD_MODELS)")
     p.add_argument("--embedding-dim", type=int, default=256)
+    p.add_argument("--loss", choices=["amsoftmax", "softmax"], default="amsoftmax", help="classification head: AM-Softmax (cosine, scale, margin) or plain linear softmax")
 
     g = p.add_argument_group("LoRA (minLoRA)")
     g.add_argument("--lora-type", choices=["lora", "singlora"], default="lora", help="singlora: single matrix A (dW = A A^T), see thirdparty/minLoRA")
